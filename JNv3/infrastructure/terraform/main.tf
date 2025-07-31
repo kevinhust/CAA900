@@ -217,6 +217,9 @@ module "ecs" {
   frontend_memory = var.frontend_memory
   frontend_count  = var.frontend_desired_count
   
+  # S3 bucket ARN for task policy
+  s3_bucket_arn = module.s3.bucket_arn
+  
   tags = local.common_tags
   
   depends_on = [module.rds, module.elasticache]
@@ -247,10 +250,10 @@ module "cloudwatch" {
   
   # ECS resources for monitoring
   ecs_cluster_name = module.ecs.cluster_name
-  ecs_service_names = [
+  ecs_service_names = compact([
     module.ecs.backend_service_name,
     module.ecs.frontend_service_name
-  ]
+  ])
   
   # RDS and ElastiCache for monitoring
   rds_instance_id = module.rds.instance_id
@@ -259,6 +262,9 @@ module "cloudwatch" {
   # ALB for monitoring
   alb_arn_suffix = module.alb.alb_arn_suffix
   target_group_arn_suffix = module.alb.backend_target_group_arn_suffix
+  
+  # Disable log metric filters for now until ECS is deployed
+  create_log_metric_filters = false
   
   tags = local.common_tags
 }

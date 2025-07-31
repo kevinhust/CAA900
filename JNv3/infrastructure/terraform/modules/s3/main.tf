@@ -52,6 +52,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "main" {
     id     = "main_lifecycle"
     status = "Enabled"
 
+    filter {
+      prefix = ""
+    }
+
     # Transition to Infrequent Access after 30 days
     transition {
       days          = 30

@@ -13,7 +13,7 @@ resource "aws_elasticache_subnet_group" "main" {
 
 # ElastiCache Parameter Group
 resource "aws_elasticache_parameter_group" "main" {
-  family = "redis7.x"
+  family = "redis7"
   name   = "${var.name_prefix}-cache-params"
 
   # Performance optimization parameters
@@ -32,10 +32,6 @@ resource "aws_elasticache_parameter_group" "main" {
     value = "60"
   }
 
-  parameter {
-    name  = "maxclients"
-    value = "10000"
-  }
 
   tags = var.tags
 }

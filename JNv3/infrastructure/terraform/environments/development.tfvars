@@ -4,7 +4,7 @@
 # ============================================================================
 # PROJECT CONFIGURATION
 # ============================================================================
-project_name = "jobquest-navigator-v2"
+project_name = "jobquest-nav"
 environment  = "development"
 aws_region   = "us-east-1"
 
@@ -30,7 +30,7 @@ rds_instance_class     = "db.t3.micro"
 rds_allocated_storage  = 20
 rds_max_allocated_storage = 50
 
-database_name    = "jobquest_navigator_v2_dev"
+database_name    = "jobquest_nav_dev"
 database_username = "jobquest_dev_user"
 
 # Minimal backup for development
@@ -70,7 +70,7 @@ cognito_client_id    = "5iui547bod6sqgsi1a4heidpep"
 cors_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002,https://*.amazonaws.com"
 
 # SSL certificate (optional for development)
-ssl_certificate_arn = ""
+ssl_certificate_arn = null
 
 # S3 bucket configuration - use generated name for development
 s3_bucket_name = ""  # Empty means use generated name

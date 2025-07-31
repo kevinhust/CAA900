@@ -108,7 +108,7 @@ resource "aws_cloudwatch_dashboard" "main" {
     ]
   })
 
-  tags = var.tags
+  # tags = var.tags  # Not supported for CloudWatch dashboard
 }
 
 # Data source
@@ -207,7 +207,7 @@ resource "aws_cloudwatch_metric_alarm" "high_error_rate" {
       }
     }
     
-    return_data = true
+    return_data = false
   }
   
   metric_query {
@@ -263,7 +263,7 @@ resource "aws_cloudwatch_metric_alarm" "database_connections_high" {
 
 # ECS Service Task Count Alarm
 resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks_low" {
-  count               = length(var.ecs_service_names)
+  count               = var.create_log_metric_filters ? length(var.ecs_service_names) : 0
   alarm_name          = "${var.name_prefix}-${var.ecs_service_names[count.index]}-tasks-low"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = "2"
@@ -285,6 +285,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks_low" {
 
 # Custom Log Metric Filters
 resource "aws_cloudwatch_log_metric_filter" "error_count" {
+  count          = var.create_log_metric_filters ? 1 : 0
   name           = "${var.name_prefix}-error-count"
   log_group_name = "/ecs/${var.name_prefix}/backend"
   pattern        = "[timestamp, request_id, level=ERROR, ...]"
@@ -297,6 +298,7 @@ resource "aws_cloudwatch_log_metric_filter" "error_count" {
 }
 
 resource "aws_cloudwatch_log_metric_filter" "critical_errors" {
+  count          = var.create_log_metric_filters ? 1 : 0
   name           = "${var.name_prefix}-critical-errors"
   log_group_name = "/ecs/${var.name_prefix}/backend"
   pattern        = "[timestamp, request_id, level=CRITICAL, ...]"
@@ -448,34 +450,34 @@ resource "aws_cloudwatch_event_target" "ecs_task_state_sns" {
   arn       = aws_sns_topic.alerts.arn
 }
 
-# Cost Anomaly Detection
-resource "aws_ce_anomaly_detector" "service_monitor" {
-  count         = var.enable_cost_anomaly_detection ? 1 : 0
-  name          = "${var.name_prefix}-cost-anomaly"
-  monitor_type  = "DIMENSIONAL"
+# Cost Anomaly Detection (commented out - not supported in this provider version)
+# resource "aws_ce_anomaly_detector" "service_monitor" {
+#   count         = var.enable_cost_anomaly_detection ? 1 : 0
+#   name          = "${var.name_prefix}-cost-anomaly"
+#   monitor_type  = "DIMENSIONAL"
+#
+#   specification = jsonencode({
+#     Dimension = "SERVICE"
+#     MatchOptions = ["EQUALS"]
+#     Values = ["Amazon Elastic Container Service", "Amazon Relational Database Service"]
+#   })
+#
+#   tags = var.tags
+# }
 
-  specification = jsonencode({
-    Dimension = "SERVICE"
-    MatchOptions = ["EQUALS"]
-    Values = ["Amazon Elastic Container Service", "Amazon Relational Database Service"]
-  })
-
-  tags = var.tags
-}
-
-resource "aws_ce_anomaly_subscription" "service_monitor" {
-  count     = var.enable_cost_anomaly_detection ? 1 : 0
-  name      = "${var.name_prefix}-cost-anomaly-subscription"
-  frequency = "DAILY"
-  
-  monitor_arn_list = [
-    aws_ce_anomaly_detector.service_monitor[0].arn
-  ]
-  
-  subscriber {
-    type    = "EMAIL"
-    address = var.alert_email_addresses[0]
-  }
-
-  tags = var.tags
-}
+# resource "aws_ce_anomaly_subscription" "service_monitor" {
+#   count     = var.enable_cost_anomaly_detection ? 1 : 0
+#   name      = "${var.name_prefix}-cost-anomaly-subscription"
+#   frequency = "DAILY"
+#   
+#   monitor_arn_list = [
+#     aws_ce_anomaly_detector.service_monitor[0].arn
+#   ]
+#   
+#   subscriber {
+#     type    = "EMAIL"
+#     address = var.alert_email_addresses[0]
+#   }
+#
+#   tags = var.tags
+# }

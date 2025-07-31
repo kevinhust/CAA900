@@ -197,7 +197,7 @@ output "ecs_task_role_arn" {
 
 output "deployment_role_arn" {
   description = "ARN of the deployment role for CI/CD"
-  value       = module.iam.deployment_role_arn
+  value       = module.iam.ecs_task_execution_role_arn
 }
 
 # ============================================================================

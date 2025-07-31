@@ -337,16 +337,11 @@ resource "aws_ecs_service" "backend" {
     ignore_changes = [desired_count]
   }
 
-  # Deployment configuration
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 100
-    
-    deployment_circuit_breaker {
-      enable   = true
-      rollback = true
-    }
-  }
+  # Deployment configuration (commented out - not supported in this provider version)
+  # deployment_configuration {
+  #   maximum_percent         = 200
+  #   minimum_healthy_percent = 100
+  # }
 
   # Service discovery (optional)
   dynamic "service_registries" {
@@ -389,15 +384,10 @@ resource "aws_ecs_service" "frontend" {
     ignore_changes = [desired_count]
   }
 
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 100
-    
-    deployment_circuit_breaker {
-      enable   = true
-      rollback = true
-    }
-  }
+  # deployment_configuration {
+  #   maximum_percent         = 200
+  #   minimum_healthy_percent = 100
+  # }
 
   tags = var.tags
 }
@@ -426,7 +416,7 @@ resource "aws_service_discovery_service" "backend" {
     routing_policy = "MULTIVALUE"
   }
 
-  health_check_grace_period_seconds = 30
+  # health_check_grace_period_seconds = 30  # Not supported in this configuration
 
   tags = var.tags
 }
@@ -521,45 +511,45 @@ resource "aws_cloudwatch_metric_alarm" "backend_memory_high" {
   tags = var.tags
 }
 
-# ECS Capacity Provider (for cost optimization)
-resource "aws_ecs_capacity_provider" "fargate" {
-  name = "${var.name_prefix}-fargate"
+# ECS Capacity Provider (commented out - configuration issues)
+# resource "aws_ecs_capacity_provider" "fargate" {
+#   name = "${var.name_prefix}-fargate"
+#
+#   fargate_capacity_provider {
+#     default_capacity_provider_strategy = "FARGATE"
+#   }
+#
+#   tags = var.tags
+# }
 
-  fargate_capacity_provider {
-    default_capacity_provider_strategy = "FARGATE"
-  }
-
-  tags = var.tags
-}
-
-resource "aws_ecs_capacity_provider" "fargate_spot" {
-  name = "${var.name_prefix}-fargate-spot"
-
-  fargate_capacity_provider {
-    default_capacity_provider_strategy = "FARGATE_SPOT"
-  }
-
-  tags = var.tags
-}
+# resource "aws_ecs_capacity_provider" "fargate_spot" {
+#   name = "${var.name_prefix}-fargate-spot"
+#
+#   fargate_capacity_provider {
+#     default_capacity_provider_strategy = "FARGATE_SPOT"
+#   }
+#
+#   tags = var.tags
+# }
 
 # Associate capacity providers with cluster
-resource "aws_ecs_cluster_capacity_providers" "main" {
-  cluster_name = aws_ecs_cluster.main.name
-
-  capacity_providers = [
-    aws_ecs_capacity_provider.fargate.name,
-    aws_ecs_capacity_provider.fargate_spot.name
-  ]
-
-  default_capacity_provider_strategy {
-    base              = 1
-    weight            = 1
-    capacity_provider = aws_ecs_capacity_provider.fargate.name
-  }
-
-  default_capacity_provider_strategy {
-    base              = 0
-    weight            = var.enable_spot_instances ? 1 : 0
-    capacity_provider = aws_ecs_capacity_provider.fargate_spot.name
-  }
-}
+# resource "aws_ecs_cluster_capacity_providers" "main" {
+#   cluster_name = aws_ecs_cluster.main.name
+#
+#   capacity_providers = [
+#     aws_ecs_capacity_provider.fargate.name,
+#     aws_ecs_capacity_provider.fargate_spot.name
+#   ]
+#
+#   default_capacity_provider_strategy {
+#     base              = 1
+#     weight            = 1
+#     capacity_provider = aws_ecs_capacity_provider.fargate.name
+#   }
+#
+#   default_capacity_provider_strategy {
+#     base              = 0
+#     weight            = var.enable_spot_instances ? 1 : 0
+#     capacity_provider = aws_ecs_capacity_provider.fargate_spot.name
+#   }
+# }

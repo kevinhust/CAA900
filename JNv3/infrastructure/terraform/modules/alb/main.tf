@@ -64,6 +64,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
     id     = "log_lifecycle"
     status = "Enabled"
 
+    filter {
+      prefix = "alb-access-logs/"
+    }
+
     expiration {
       days = var.log_retention_days
     }
@@ -135,20 +139,25 @@ resource "aws_lb_listener" "https" {
   tags = var.tags
 }
 
-# HTTP Listener (Redirect to HTTPS)
+# HTTP Listener (Forward to backend when no SSL cert)
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
-
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
+    type = var.certificate_arn != null ? "redirect" : "forward"
+    
+    dynamic "redirect" {
+      for_each = var.certificate_arn != null ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
     }
+    
+    target_group_arn = var.certificate_arn == null ? aws_lb_target_group.backend.arn : null
   }
 
   tags = var.tags
@@ -156,7 +165,7 @@ resource "aws_lb_listener" "http" {
 
 # Backend Target Group
 resource "aws_lb_target_group" "backend" {
-  name     = "${var.name_prefix}-backend-tg"
+  name     = "${var.name_prefix}-be-tg"
   port     = 8000
   protocol = "HTTP"
   vpc_id   = var.vpc_id
@@ -193,7 +202,7 @@ resource "aws_lb_target_group" "backend" {
 # Frontend Target Group (if using ALB for frontend)
 resource "aws_lb_target_group" "frontend" {
   count    = var.create_frontend_target_group ? 1 : 0
-  name     = "${var.name_prefix}-frontend-tg"
+  name     = "${var.name_prefix}-fe-tg"
   port     = 80
   protocol = "HTTP"
   vpc_id   = var.vpc_id
@@ -221,8 +230,8 @@ resource "aws_lb_target_group" "frontend" {
   })
 }
 
-# Listener Rules for API routing
-resource "aws_lb_listener_rule" "api_backend" {
+# Listener Rules for API routing (HTTPS)
+resource "aws_lb_listener_rule" "api_backend_https" {
   count        = var.certificate_arn != null ? 1 : 0
   listener_arn = aws_lb_listener.https[0].arn
   priority     = 100
@@ -241,10 +250,50 @@ resource "aws_lb_listener_rule" "api_backend" {
   tags = var.tags
 }
 
-# Listener Rules for GraphQL routing
-resource "aws_lb_listener_rule" "graphql_backend" {
+# Listener Rules for API routing (HTTP)
+resource "aws_lb_listener_rule" "api_backend_http" {
+  count        = var.certificate_arn == null ? 1 : 0
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 100
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/api/*", "/graphql", "/health", "/docs", "/redoc"]
+    }
+  }
+
+  tags = var.tags
+}
+
+# Listener Rules for GraphQL routing (HTTPS)
+resource "aws_lb_listener_rule" "graphql_backend_https" {
   count        = var.certificate_arn != null ? 1 : 0
   listener_arn = aws_lb_listener.https[0].arn
+  priority     = 90
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/graphql"]
+    }
+  }
+
+  tags = var.tags
+}
+
+# Listener Rules for GraphQL routing (HTTP)
+resource "aws_lb_listener_rule" "graphql_backend_http" {
+  count        = var.certificate_arn == null ? 1 : 0
+  listener_arn = aws_lb_listener.http.arn
   priority     = 90
 
   action {

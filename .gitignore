@@ -10,6 +10,18 @@ node_modules/
 .taskmaster/
 .venv/
 
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform/
+.terraform.lock.hcl
+terraform.tfplan
+terraform.tfplan.*
+.terraformrc
+terraform.rc
+
 # Allow GitHub Actions workflows
 !.github/
 !.github/workflows/
