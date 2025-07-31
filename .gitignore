@@ -6,7 +6,11 @@ node_modules/
 .env
 *.log
 .cursor/
-.github/
 .roo/
 .taskmaster/
 .venv/
+
+# Allow GitHub Actions workflows
+!.github/
+!.github/workflows/
+!.github/workflows/*
