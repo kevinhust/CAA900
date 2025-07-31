@@ -1,0 +1,89 @@
+name: Simple AWS Deployment
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'JNv3/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: jobquest-navigator-v3
+
+jobs:
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.6.0'
+        terraform_wrapper: false
+    
+    - name: Terraform Init
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform init -backend=false
+    
+    - name: Terraform Validate
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform validate
+    
+    - name: Terraform Plan
+      env:
+        TF_VAR_environment: production
+        TF_VAR_project_name: ${{ env.PROJECT_NAME }}
+        TF_VAR_aws_region: ${{ env.AWS_REGION }}
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform plan -var-file="environments/production.tfvars" -no-color
+    
+    - name: Terraform Apply
+      env:
+        TF_VAR_environment: production
+        TF_VAR_project_name: ${{ env.PROJECT_NAME }}
+        TF_VAR_aws_region: ${{ env.AWS_REGION }}
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform apply -var-file="environments/production.tfvars" -auto-approve -no-color
+    
+    - name: Get deployment outputs
+      id: terraform-outputs
+      run: |
+        cd JNv3/infrastructure/terraform
+        echo "frontend_url=$(terraform output -raw frontend_website_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
+        echo "api_url=$(terraform output -raw api_gateway_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
+    
+    - name: Deployment Summary
+      run: |
+        echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** production" >> $GITHUB_STEP_SUMMARY
+        echo "**Frontend URL:** ${{ steps.terraform-outputs.outputs.frontend_url }}" >> $GITHUB_STEP_SUMMARY
+        echo "**API URL:** ${{ steps.terraform-outputs.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Deployed at:** $(date)" >> $GITHUB_STEP_SUMMARY
