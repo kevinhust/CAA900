@@ -46,7 +46,7 @@ jobs:
     
     - name: Terraform Init
       run: |
-        cd JNv3/infrastructure/terraform
+        cd JNv3/infrastructure/simple-terraform
         terraform init -backend=false
     
     - name: Terraform Plan (Simple Deployment)
@@ -54,21 +54,21 @@ jobs:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
       run: |
-        cd JNv3/infrastructure/terraform
-        terraform plan simple-deployment.tf -no-color
+        cd JNv3/infrastructure/simple-terraform
+        terraform plan -no-color
     
     - name: Terraform Apply (Simple Deployment)
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
       run: |
-        cd JNv3/infrastructure/terraform
-        terraform apply -auto-approve simple-deployment.tf -no-color
+        cd JNv3/infrastructure/simple-terraform
+        terraform apply -auto-approve -no-color
     
     - name: Get deployment outputs
       id: terraform-outputs
       run: |
-        cd JNv3/infrastructure/terraform
+        cd JNv3/infrastructure/simple-terraform
         echo "website_url=$(terraform output -raw website_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
         echo "bucket_name=$(terraform output -raw s3_bucket_name 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
     
