@@ -5,7 +5,7 @@
 # ============================================================================
 # PROJECT CONFIGURATION
 # ============================================================================
-project_name = "jobquest-navigator-v2"
+project_name = "jobquest-navigator-v3"
 environment  = "production"
 aws_region   = "us-east-1"
 
@@ -31,7 +31,7 @@ rds_instance_class     = "db.t3.medium"  # More powerful for production
 rds_allocated_storage  = 100
 rds_max_allocated_storage = 1000
 
-database_name    = "jobquest_navigator_v2_prod"
+database_name    = "jobquest_navigator_v3_prod"
 database_username = "jobquest_prod_user"
 
 # Production backup strategy
