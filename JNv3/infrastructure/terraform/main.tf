@@ -9,16 +9,6 @@ terraform {
       version = "~> 5.0"
     }
   }
-  
-  # Backend configuration for state management
-  backend "s3" {
-    # This will be configured via terraform init -backend-config
-    # bucket = "jobquest-terraform-state"
-    # key    = "main/terraform.tfstate"
-    # region = "us-east-1"
-    # encrypt = true
-    # dynamodb_table = "jobquest-terraform-locks"
-  }
 }
 
 # Configure the AWS Provider

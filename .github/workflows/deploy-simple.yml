@@ -47,7 +47,7 @@ jobs:
     - name: Terraform Init
       run: |
         cd JNv3/infrastructure/terraform
-        terraform init -backend=false
+        terraform init
     
     - name: Terraform Validate
       run: |
