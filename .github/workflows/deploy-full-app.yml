@@ -7,6 +7,14 @@ on:
       - 'JNv3/**'
       - '.github/workflows/**'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
 
 env:
   AWS_REGION: us-east-1
@@ -41,40 +49,88 @@ jobs:
         terraform_version: '1.6.0'
         terraform_wrapper: false
     
+    - name: Terraform Format Check
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform fmt -check -diff || {
+          echo "❌ Terraform files are not properly formatted!"
+          echo "Run 'terraform fmt' to fix formatting issues."
+          exit 1
+        }
+    
     - name: Terraform Init
       run: |
-        cd JNv3/infrastructure/simple-terraform
-        terraform init -backend=false
+        cd JNv3/infrastructure/terraform
+        terraform init -backend-config=backend-configs/production.hcl -input=false
+    
+    - name: Terraform Validate
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform validate
     
     - name: Terraform Plan
+      id: plan
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
       run: |
-        cd JNv3/infrastructure/simple-terraform
-        terraform plan -no-color
+        cd JNv3/infrastructure/terraform
+        terraform plan -input=false -no-color -out=tfplan
+        echo "plan_exitcode=$?" >> $GITHUB_OUTPUT
+    
+    - name: Show Terraform Plan Summary
+      run: |
+        cd JNv3/infrastructure/terraform
+        echo "## 📋 Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        terraform show -no-color tfplan | head -50 >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
     
     - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && steps.plan.outputs.plan_exitcode == '0'
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
       run: |
-        cd JNv3/infrastructure/simple-terraform
-        terraform apply -auto-approve -no-color
+        cd JNv3/infrastructure/terraform
+        echo "🚀 Applying Terraform plan to production..."
+        terraform apply -input=false -no-color tfplan
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Infrastructure deployment successful!"
+        else
+          echo "❌ Infrastructure deployment failed!"
+          exit 1
+        fi
     
     - name: Get deployment outputs
       id: terraform-outputs
       run: |
-        cd JNv3/infrastructure/simple-terraform
+        cd JNv3/infrastructure/terraform
         echo "backend_repo_url=$(terraform output -raw backend_ecr_repository_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
         echo "frontend_repo_url=$(terraform output -raw frontend_ecr_repository_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
         echo "application_url=$(terraform output -raw application_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
         echo "cluster_name=$(terraform output -raw ecs_cluster_name 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
 
+    - name: Notify on Failure
+      if: failure()
+      run: |
+        echo "## ❌ Infrastructure Deployment Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Error occurred during infrastructure deployment.**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Debug Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Check Terraform plan output above" >> $GITHUB_STEP_SUMMARY
+        echo "2. Verify AWS credentials and permissions" >> $GITHUB_STEP_SUMMARY
+        echo "3. Check for resource conflicts or limits" >> $GITHUB_STEP_SUMMARY
+        echo "4. Review backend state configuration" >> $GITHUB_STEP_SUMMARY
+
   build-and-push-images:
     name: Build and Push Docker Images
     runs-on: ubuntu-latest
     needs: deploy-infrastructure
+    if: success()
     environment: production
     
     steps:
@@ -313,11 +369,24 @@ jobs:
         cd /tmp/frontend-app
         docker build -t ${{ needs.deploy-infrastructure.outputs.frontend_repo_url }}:latest .
         docker push ${{ needs.deploy-infrastructure.outputs.frontend_repo_url }}:latest
+    
+    - name: Notify on Image Build Failure
+      if: failure()
+      run: |
+        echo "## ❌ Docker Image Build Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Error occurred during Docker image build/push.**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Debug Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Check ECR repository permissions" >> $GITHUB_STEP_SUMMARY
+        echo "2. Verify Docker build context" >> $GITHUB_STEP_SUMMARY
+        echo "3. Check ECR login credentials" >> $GITHUB_STEP_SUMMARY
 
   update-services:
     name: Update ECS Services
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, build-and-push-images]
+    if: success()
     environment: production
     
     steps:
