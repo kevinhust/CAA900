@@ -687,7 +687,7 @@ resource "aws_ecs_service" "backend" {
 
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100
-  
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true
@@ -725,7 +725,7 @@ resource "aws_ecs_service" "frontend" {
 
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100
-  
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true
