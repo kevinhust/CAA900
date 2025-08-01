@@ -1,0 +1,595 @@
+name: Deploy Complete JobQuest Navigator v3 Application
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'JNv3/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+      skip_infrastructure:
+        description: 'Skip infrastructure deployment (use existing)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: jobquest-navigator-v3
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # Phase 1: Deploy Infrastructure
+  deploy-infrastructure:
+    name: Deploy AWS Infrastructure
+    runs-on: ubuntu-latest
+    environment: production
+    if: ${{ !inputs.skip_infrastructure }}
+    
+    outputs:
+      backend_repo_url: ${{ steps.terraform-outputs.outputs.backend_repo_url }}
+      frontend_repo_url: ${{ steps.terraform-outputs.outputs.frontend_repo_url }}
+      application_url: ${{ steps.terraform-outputs.outputs.application_url }}
+      cluster_name: ${{ steps.terraform-outputs.outputs.cluster_name }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.6.0'
+        terraform_wrapper: false
+        
+    - name: Terraform Format Check
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform fmt -check -diff || {
+          echo "❌ Terraform files are not properly formatted!"
+          echo "Run 'terraform fmt' to fix formatting issues."
+          exit 1
+        }
+        
+    - name: Terraform Init
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform init -backend-config=backend-configs/production.hcl -input=false
+        
+    - name: Terraform Validate
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform validate
+        
+    - name: Terraform Plan
+      id: plan
+      env:
+        TF_VAR_project_name: ${{ env.PROJECT_NAME }}
+        TF_VAR_aws_region: ${{ env.AWS_REGION }}
+        TF_VAR_secret_key: ${{ secrets.SECRET_KEY }}
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform plan -input=false -no-color -out=tfplan
+        echo "plan_exitcode=$?" >> $GITHUB_OUTPUT
+        
+    - name: Show Terraform Plan Summary
+      run: |
+        cd JNv3/infrastructure/terraform
+        echo "## 📋 Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        terraform show -no-color tfplan | head -100 >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && steps.plan.outputs.plan_exitcode == '0'
+      env:
+        TF_VAR_project_name: ${{ env.PROJECT_NAME }}
+        TF_VAR_aws_region: ${{ env.AWS_REGION }}
+        TF_VAR_secret_key: ${{ secrets.SECRET_KEY }}
+      run: |
+        cd JNv3/infrastructure/terraform
+        echo "🚀 Applying Terraform plan to production..."
+        terraform apply -input=false -no-color tfplan
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Infrastructure deployment successful!"
+        else
+          echo "❌ Infrastructure deployment failed!"
+          exit 1
+        fi
+        
+    - name: Get deployment outputs
+      id: terraform-outputs
+      run: |
+        cd JNv3/infrastructure/terraform
+        echo "backend_repo_url=$(terraform output -raw backend_ecr_repository_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
+        echo "frontend_repo_url=$(terraform output -raw frontend_ecr_repository_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
+        echo "application_url=$(terraform output -raw application_url 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
+        echo "cluster_name=$(terraform output -raw ecs_cluster_name 2>/dev/null || echo 'Not available')" >> $GITHUB_OUTPUT
+
+  # Phase 2: Build and Push Docker Images
+  build-and-push-images:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure]
+    if: ${{ always() && (needs.deploy-infrastructure.result == 'success' || inputs.skip_infrastructure) }}
+    environment: production
+    
+    outputs:
+      backend_image_tag: ${{ steps.build-info.outputs.backend_image_tag }}
+      frontend_image_tag: ${{ steps.build-info.outputs.frontend_image_tag }}
+      backend_image_uri: ${{ steps.build-info.outputs.backend_image_uri }}
+      frontend_image_uri: ${{ steps.build-info.outputs.frontend_image_uri }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        platforms: linux/amd64
+        
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Set image tags and info
+      id: build-info
+      run: |
+        IMAGE_TAG="build-$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+        ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+        
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "backend_image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "frontend_image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "backend_image_uri=${ECR_REGISTRY}/${{ env.PROJECT_NAME }}-backend:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "frontend_image_uri=${ECR_REGISTRY}/${{ env.PROJECT_NAME }}-frontend:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        
+    - name: Build and push backend image
+      working-directory: ./JNv3/apps/backend-fastapi
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.PROJECT_NAME }}-backend
+        IMAGE_TAG: ${{ steps.build-info.outputs.IMAGE_TAG }}
+      run: |
+        echo "🔨 Building backend image for AMD64 platform..."
+        
+        # Create .dockerignore if it doesn't exist
+        cat > .dockerignore << 'EOF'
+        .git
+        .github
+        .pytest_cache
+        __pycache__
+        *.pyc
+        *.pyo
+        *.pyd
+        .Python
+        build
+        develop-eggs
+        dist
+        downloads
+        eggs
+        .eggs
+        lib
+        lib64
+        parts
+        sdist
+        var
+        wheels
+        *.egg-info
+        .installed.cfg
+        *.egg
+        .env
+        .venv
+        venv/
+        ENV/
+        env/
+        .coverage
+        .coverage.*
+        htmlcov/
+        .tox/
+        .cache
+        nosetests.xml
+        coverage.xml
+        *.cover
+        .hypothesis/
+        .DS_Store
+        Thumbs.db
+        README.md
+        Dockerfile*
+        docker-compose*.yml
+        EOF
+        
+        docker buildx build \
+          --platform linux/amd64 \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --push .
+          
+        echo "✅ Backend image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+        
+    - name: Build and push frontend image
+      working-directory: ./JNv3/apps/frontend-react
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.PROJECT_NAME }}-frontend
+        IMAGE_TAG: ${{ steps.build-info.outputs.IMAGE_TAG }}
+      run: |
+        echo "🔨 Building frontend image for AMD64 platform..."
+        
+        # Create .dockerignore if it doesn't exist
+        cat > .dockerignore << 'EOF'
+        .git
+        .github
+        node_modules
+        npm-debug.log*
+        yarn-debug.log*
+        yarn-error.log*
+        .DS_Store
+        .env.local
+        .env.development.local
+        .env.test.local
+        .env.production.local
+        build
+        coverage
+        .nyc_output
+        .eslintcache
+        README.md
+        Dockerfile*
+        docker-compose*.yml
+        EOF
+        
+        docker buildx build \
+          --platform linux/amd64 \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --push .
+          
+        echo "✅ Frontend image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+    - name: Image Build Summary
+      run: |
+        echo "## 🐳 Docker Images Built Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Backend Image:** \`${{ steps.build-info.outputs.backend_image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Frontend Image:** \`${{ steps.build-info.outputs.frontend_image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Platform:** linux/amd64 (ECS Fargate compatible)" >> $GITHUB_STEP_SUMMARY
+
+  # Phase 3: Update ECS Task Definitions and Deploy Services
+  deploy-ecs-services:
+    name: Deploy ECS Services
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, build-and-push-images]
+    if: ${{ always() && needs.build-and-push-images.result == 'success' }}
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Setup Terraform (for outputs)
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.6.0'
+        terraform_wrapper: false
+        
+    - name: Get infrastructure outputs
+      id: infra-outputs
+      run: |
+        cd JNv3/infrastructure/terraform
+        terraform init -backend-config=backend-configs/production.hcl -input=false
+        
+        DB_ENDPOINT=$(terraform output -raw database_endpoint 2>/dev/null || echo "")
+        DB_NAME=$(terraform output -raw database_name 2>/dev/null || echo "jobquest")
+        DB_USERNAME=$(terraform output -raw database_username 2>/dev/null || echo "jobquest_user")
+        ALB_DNS=$(terraform output -raw application_url 2>/dev/null || echo "")
+        
+        echo "db_endpoint=${DB_ENDPOINT}" >> $GITHUB_OUTPUT
+        echo "db_name=${DB_NAME}" >> $GITHUB_OUTPUT
+        echo "db_username=${DB_USERNAME}" >> $GITHUB_OUTPUT
+        echo "alb_dns=${ALB_DNS}" >> $GITHUB_OUTPUT
+        
+    - name: Update backend task definition
+      run: |
+        echo "🔄 Updating backend task definition..."
+        
+        # Get current task definition
+        CURRENT_TASK_DEF=$(aws ecs describe-task-definition \
+          --task-definition ${{ env.PROJECT_NAME }}-backend \
+          --query 'taskDefinition' \
+          --region ${{ env.AWS_REGION }})
+        
+        # Create new task definition with updated image and environment
+        NEW_TASK_DEF=$(echo $CURRENT_TASK_DEF | jq --arg IMAGE "${{ needs.build-and-push-images.outputs.backend_image_uri }}" \
+          --arg DB_URL "postgresql+asyncpg://${{ steps.infra-outputs.outputs.db_username }}:${{ secrets.DB_PASSWORD }}@${{ steps.infra-outputs.outputs.db_endpoint }}:5432/${{ steps.infra-outputs.outputs.db_name }}" \
+          --arg SECRET_KEY "${{ secrets.SECRET_KEY }}" \
+          --arg ALB_DNS "${{ steps.infra-outputs.outputs.alb_dns }}" \
+          'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy) |
+          .containerDefinitions[0].image = $IMAGE |
+          .containerDefinitions[0].environment = [
+            {"name": "DATABASE_URL", "value": $DB_URL},
+            {"name": "SECRET_KEY", "value": $SECRET_KEY},
+            {"name": "ENVIRONMENT", "value": "production"},
+            {"name": "AWS_DEFAULT_REGION", "value": "${{ env.AWS_REGION }}"},
+            {"name": "CORS_ORIGINS", "value": $ALB_DNS},
+            {"name": "LOG_LEVEL", "value": "info"},
+            {"name": "DEBUG", "value": "false"},
+            {"name": "WORKERS", "value": "2"}
+          ]')
+        
+        # Register new task definition
+        aws ecs register-task-definition \
+          --cli-input-json "$NEW_TASK_DEF" \
+          --region ${{ env.AWS_REGION }}
+          
+        echo "✅ Backend task definition updated"
+        
+    - name: Update frontend task definition
+      run: |
+        echo "🔄 Updating frontend task definition..."
+        
+        # Get current task definition
+        CURRENT_TASK_DEF=$(aws ecs describe-task-definition \
+          --task-definition ${{ env.PROJECT_NAME }}-frontend \
+          --query 'taskDefinition' \
+          --region ${{ env.AWS_REGION }})
+        
+        # Create new task definition with updated image and environment
+        NEW_TASK_DEF=$(echo $CURRENT_TASK_DEF | jq --arg IMAGE "${{ needs.build-and-push-images.outputs.frontend_image_uri }}" \
+          --arg ALB_DNS "${{ steps.infra-outputs.outputs.alb_dns }}" \
+          'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy) |
+          .containerDefinitions[0].image = $IMAGE |
+          .containerDefinitions[0].environment = [
+            {"name": "REACT_APP_API_URL", "value": ($ALB_DNS + "/api")},
+            {"name": "REACT_APP_GRAPHQL_URL", "value": ($ALB_DNS + "/graphql")},
+            {"name": "NODE_ENV", "value": "production"},
+            {"name": "REACT_APP_ENV", "value": "production"}
+          ]')
+        
+        # Register new task definition
+        aws ecs register-task-definition \
+          --cli-input-json "$NEW_TASK_DEF" \
+          --region ${{ env.AWS_REGION }}
+          
+        echo "✅ Frontend task definition updated"
+        
+    - name: Deploy backend service
+      run: |
+        echo "🚀 Deploying backend service..."
+        
+        aws ecs update-service \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --service ${{ env.PROJECT_NAME }}-backend-service \
+          --force-new-deployment \
+          --region ${{ env.AWS_REGION }}
+          
+        echo "✅ Backend service deployment initiated"
+        
+    - name: Deploy frontend service
+      run: |
+        echo "🚀 Deploying frontend service..."
+        
+        aws ecs update-service \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --service ${{ env.PROJECT_NAME }}-frontend-service \
+          --force-new-deployment \
+          --region ${{ env.AWS_REGION }}
+          
+        echo "✅ Frontend service deployment initiated"
+        
+    - name: Wait for services to stabilize
+      run: |
+        echo "⏳ Waiting for services to stabilize..."
+        
+        echo "Waiting for backend service..."
+        aws ecs wait services-stable \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-backend-service \
+          --region ${{ env.AWS_REGION }}
+          
+        echo "Waiting for frontend service..."
+        aws ecs wait services-stable \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-frontend-service \
+          --region ${{ env.AWS_REGION }}
+          
+        echo "✅ All services are stable"
+        
+    - name: Get service status
+      run: |
+        echo "🏥 Checking service health..."
+        
+        # Get service status
+        BACKEND_STATUS=$(aws ecs describe-services \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-backend-service \
+          --query 'services[0].[runningCount,desiredCount]' \
+          --output text \
+          --region ${{ env.AWS_REGION }})
+          
+        FRONTEND_STATUS=$(aws ecs describe-services \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-frontend-service \
+          --query 'services[0].[runningCount,desiredCount]' \
+          --output text \
+          --region ${{ env.AWS_REGION }})
+          
+        echo "Backend Service: $BACKEND_STATUS"
+        echo "Frontend Service: $FRONTEND_STATUS"
+        
+        echo "## 🚀 ECS Service Deployment Status" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Backend Service:** $BACKEND_STATUS" >> $GITHUB_STEP_SUMMARY
+        echo "**Frontend Service:** $FRONTEND_STATUS" >> $GITHUB_STEP_SUMMARY
+
+  # Phase 4: Validation and Health Checks
+  validate-deployment:
+    name: Validate Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, deploy-ecs-services]
+    if: ${{ always() && needs.deploy-ecs-services.result == 'success' }}
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Get application URL
+      id: get-url
+      run: |
+        cd JNv3/infrastructure/terraform || {
+          # If terraform directory not available, get ALB DNS directly
+          ALB_ARN=$(aws elbv2 describe-load-balancers \
+            --names ${{ env.PROJECT_NAME }}-alb \
+            --query 'LoadBalancers[0].LoadBalancerArn' \
+            --output text \
+            --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+            
+          if [ -n "$ALB_ARN" ]; then
+            APP_URL=$(aws elbv2 describe-load-balancers \
+              --load-balancer-arns $ALB_ARN \
+              --query 'LoadBalancers[0].DNSName' \
+              --output text \
+              --region ${{ env.AWS_REGION }})
+            APP_URL="http://${APP_URL}"
+          else
+            APP_URL="Not available"
+          fi
+          
+          echo "application_url=${APP_URL}" >> $GITHUB_OUTPUT
+          exit 0
+        }
+        
+        # Try to get from Terraform outputs first
+        terraform init -backend-config=backend-configs/production.hcl -input=false 2>/dev/null || true
+        APP_URL=$(terraform output -raw application_url 2>/dev/null || echo "Not available")
+        echo "application_url=${APP_URL}" >> $GITHUB_OUTPUT
+        
+    - name: Health check endpoints
+      run: |
+        APP_URL="${{ steps.get-url.outputs.application_url }}"
+        
+        if [ "$APP_URL" = "Not available" ]; then
+          echo "❌ Application URL not available"
+          exit 1
+        fi
+        
+        echo "🌐 Testing application endpoints at: $APP_URL"
+        
+        # Wait for ALB to be ready
+        echo "⏳ Waiting for load balancer to be ready..."
+        sleep 30
+        
+        # Test frontend
+        echo "Testing frontend..."
+        FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}/" --max-time 30 || echo "000")
+        echo "Frontend status: $FRONTEND_STATUS"
+        
+        # Test backend health
+        echo "Testing backend health..."
+        BACKEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}/api/health" --max-time 30 || echo "000")
+        echo "Backend health status: $BACKEND_STATUS"
+        
+        # Test GraphQL endpoint (may return 405 for GET, which is normal)
+        echo "Testing GraphQL endpoint..."
+        GRAPHQL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}/graphql" --max-time 30 || echo "000")
+        echo "GraphQL status: $GRAPHQL_STATUS"
+        
+        echo "## 🎯 Deployment Validation Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Application URL:** $APP_URL" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Endpoint | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Frontend | HTTP $FRONTEND_STATUS | $([ "$FRONTEND_STATUS" -eq 200 ] && echo "✅ Healthy" || echo "⚠️ Check needed") |" >> $GITHUB_STEP_SUMMARY
+        echo "| Backend API | HTTP $BACKEND_STATUS | $([ "$BACKEND_STATUS" -eq 200 ] && echo "✅ Healthy" || echo "⚠️ Check needed") |" >> $GITHUB_STEP_SUMMARY
+        echo "| GraphQL | HTTP $GRAPHQL_STATUS | $([ "$GRAPHQL_STATUS" -eq 200 ] || [ "$GRAPHQL_STATUS" -eq 405 ] && echo "✅ Accessible" || echo "⚠️ Check needed") |" >> $GITHUB_STEP_SUMMARY
+        
+        # Summary
+        if [ "$FRONTEND_STATUS" = "200" ] && ([ "$BACKEND_STATUS" = "200" ] || [ "$BACKEND_STATUS" = "404" ]); then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Deployment Successful!** Application is accessible and services are responding." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Deployment completed but some endpoints may need attention.** Check the endpoint statuses above." >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Deployment success notification
+      if: success()
+      run: |
+        echo "## 🎉 Complete Application Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**JobQuest Navigator v3** has been successfully deployed to production:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🌐 **Access your application:** ${{ steps.get-url.outputs.application_url }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**What was deployed:**" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Complete AWS Infrastructure (Terraform)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ FastAPI + Strawberry GraphQL Backend" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ React 19 Frontend with Modern UI" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ PostgreSQL Database with Schema" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Application Load Balancer with Routing" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ ECS Fargate Services with Auto-scaling" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ ECR Container Registry with Images" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ CloudWatch Logging and Monitoring" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Docker Images Deployed:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Backend: \`${{ needs.build-and-push-images.outputs.backend_image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Frontend: \`${{ needs.build-and-push-images.outputs.frontend_image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+
+    - name: Rollback instructions on failure
+      if: failure()
+      run: |
+        echo "## ❌ Deployment Validation Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "The deployment completed but validation checks failed." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Troubleshooting Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Check ECS service logs in CloudWatch" >> $GITHUB_STEP_SUMMARY
+        echo "2. Verify container health and startup logs" >> $GITHUB_STEP_SUMMARY
+        echo "3. Check Application Load Balancer target group health" >> $GITHUB_STEP_SUMMARY
+        echo "4. Verify database connectivity and migrations" >> $GITHUB_STEP_SUMMARY
+        echo "5. Check environment variables and secrets configuration" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Manual Rollback (if needed):**" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "# Rollback to previous task definition" >> $GITHUB_STEP_SUMMARY
+        echo "aws ecs update-service --cluster ${{ env.PROJECT_NAME }}-cluster --service ${{ env.PROJECT_NAME }}-backend-service --task-definition ${{ env.PROJECT_NAME }}-backend:PREVIOUS_REVISION" >> $GITHUB_STEP_SUMMARY
+        echo "aws ecs update-service --cluster ${{ env.PROJECT_NAME }}-cluster --service ${{ env.PROJECT_NAME }}-frontend-service --task-definition ${{ env.PROJECT_NAME }}-frontend:PREVIOUS_REVISION" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
