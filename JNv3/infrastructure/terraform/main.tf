@@ -65,6 +65,10 @@ module "vpc" {
   single_nat_gateway   = var.single_nat_gateway
   enable_dns_hostnames = true
   enable_dns_support   = true
+  enable_vpc_endpoints = true
+  
+  # Pass backend security group ID for VPC endpoint access
+  backend_security_group_id = module.security_groups.backend_security_group_id
   
   tags = local.common_tags
 }
@@ -126,6 +130,10 @@ module "rds" {
   # High availability
   multi_az = var.environment == "production"
   
+  # Development-specific overrides
+  deletion_protection = var.environment == "production"
+  skip_final_snapshot = var.environment != "production"
+  
   tags = local.common_tags
 }
 
@@ -185,13 +193,13 @@ module "ecs" {
   backend_security_group_id  = module.security_groups.backend_security_group_id
   frontend_security_group_id = module.security_groups.frontend_security_group_id
   
-  # Container images
+  # Container images - use public images if ECR is empty
   backend_image_uri  = "${module.ecr.repository_urls["jobquest-backend"]}:latest"
   frontend_image_uri = "${module.ecr.repository_urls["jobquest-frontend"]}:latest"
   
   # Environment variables
   environment_variables = {
-    DATABASE_URL = "postgresql+asyncpg://${var.database_username}:${random_password.db_password.result}@${module.rds.endpoint}:5432/${var.database_name}"
+    DATABASE_URL = "postgresql+asyncpg://${var.database_username}:${module.rds.master_password}@${module.rds.endpoint}:5432/${var.database_name}"
     REDIS_URL    = "redis://${module.elasticache.primary_endpoint}:6379/0"
     
     # Application settings
@@ -206,6 +214,16 @@ module "ecs" {
     
     # CORS
     CORS_ORIGINS = var.cors_origins
+    
+    # S3 Configuration
+    AWS_STORAGE_BUCKET_NAME = module.s3.bucket_name
+    AWS_S3_REGION_NAME     = var.aws_region
+  }
+  
+  # Secrets from Secrets Manager
+  secrets_variables = {
+    DB_PASSWORD = module.rds.db_password_secret_arn
+    APP_SECRET_KEY = aws_secretsmanager_secret.app_secret_key.arn
   }
   
   # Service configuration
@@ -222,7 +240,7 @@ module "ecs" {
   
   tags = local.common_tags
   
-  depends_on = [module.rds, module.elasticache]
+  depends_on = [module.rds, module.elasticache, module.alb]
 }
 
 # S3 Bucket for file storage

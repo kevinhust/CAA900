@@ -31,40 +31,20 @@ resource "aws_db_subnet_group" "main" {
   })
 }
 
-# DB Parameter Group
+# DB Parameter Group (simplified - only dynamic parameters)
 resource "aws_db_parameter_group" "main" {
   family = "postgres15"
   name   = "${var.name_prefix}-db-params"
 
-  # Performance and connection optimization
-  parameter {
-    name  = "shared_preload_libraries"
-    value = "pg_stat_statements"
-  }
-
+  # Only include dynamic parameters to avoid reboot requirements
   parameter {
     name  = "log_statement"
     value = "all"
   }
 
   parameter {
-    name  = "log_duration"
-    value = "1"
-  }
-
-  parameter {
-    name  = "log_min_duration_statement"
-    value = "1000" # Log queries longer than 1 second
-  }
-
-  parameter {
-    name  = "max_connections"
-    value = var.max_connections
-  }
-
-  parameter {
-    name  = "shared_buffers"
-    value = "{DBInstanceClassMemory/32768}" # 25% of available memory
+    name  = "log_min_duration_statement" 
+    value = "1000"
   }
 
   tags = var.tags

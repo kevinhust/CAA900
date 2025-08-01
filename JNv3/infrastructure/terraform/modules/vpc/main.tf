@@ -277,6 +277,131 @@ resource "aws_vpc_endpoint" "dynamodb" {
   })
 }
 
+# IAM policy document for ECR VPC endpoints
+data "aws_iam_policy_document" "ecr_vpc_endpoint_policy" {
+  count = var.enable_vpc_endpoints ? 1 : 0
+
+  statement {
+    effect = "Allow"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = [
+      "ecr:GetAuthorizationToken",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage"
+    ]
+    resources = ["*"]
+  }
+}
+
+# ECR DKR VPC Endpoint (Interface endpoint - required for ECR image pulls)
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  count = var.enable_vpc_endpoints ? 1 : 0
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.ecr.dkr"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  policy              = data.aws_iam_policy_document.ecr_vpc_endpoint_policy[0].json
+  
+  private_dns_enabled = true
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-ecr-dkr-vpc-endpoint"
+    Type = "VPC Endpoint"
+  })
+}
+
+# ECR API VPC Endpoint (Interface endpoint - required for ECR authentication)
+resource "aws_vpc_endpoint" "ecr_api" {
+  count = var.enable_vpc_endpoints ? 1 : 0
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.ecr.api"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  policy              = data.aws_iam_policy_document.ecr_vpc_endpoint_policy[0].json
+  
+  private_dns_enabled = true
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-ecr-api-vpc-endpoint"
+    Type = "VPC Endpoint"
+  })
+}
+
+# CloudWatch Logs VPC Endpoint (Interface endpoint - required for ECS logging)
+resource "aws_vpc_endpoint" "logs" {
+  count = var.enable_vpc_endpoints ? 1 : 0
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.logs"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  
+  private_dns_enabled = true
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-logs-vpc-endpoint"
+    Type = "VPC Endpoint"
+  })
+}
+
+# Security Group for VPC Endpoints
+resource "aws_security_group" "vpc_endpoints" {
+  count = var.enable_vpc_endpoints ? 1 : 0
+
+  name_prefix = "${var.name_prefix}-vpc-endpoints-"
+  vpc_id      = aws_vpc.main.id
+  description = "Security group for VPC endpoints"
+
+  # HTTPS access from private subnets (CIDR-based)
+  ingress {
+    description = "HTTPS from private subnets"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = var.private_subnets
+  }
+
+  # HTTPS access from ECS backend security group (security group-based)
+  dynamic "ingress" {
+    for_each = var.backend_security_group_id != null ? [1] : []
+    content {
+      description     = "HTTPS from ECS backend tasks"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      security_groups = [var.backend_security_group_id]
+    }
+  }
+
+  # All outbound traffic
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-vpc-endpoints-sg"
+    Type = "Security Group"
+    Component = "VPC Endpoints"
+  })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # ============================================================================
 # DATA SOURCES
 # ============================================================================

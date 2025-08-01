@@ -36,8 +36,8 @@ output "service_discovery_security_group_id" {
 }
 
 output "vpc_endpoints_security_group_id" {
-  description = "ID of the VPC endpoints security group"
-  value       = var.enable_vpc_endpoints ? aws_security_group.vpc_endpoints[0].id : null
+  description = "ID of the VPC endpoints security group (now managed by VPC module)"
+  value       = null
 }
 
 output "security_group_map" {
@@ -50,6 +50,6 @@ output "security_group_map" {
     redis             = aws_security_group.redis.id
     service_discovery = aws_security_group.service_discovery.id
     bastion           = var.enable_bastion_access ? aws_security_group.bastion[0].id : null
-    vpc_endpoints     = var.enable_vpc_endpoints ? aws_security_group.vpc_endpoints[0].id : null
+    vpc_endpoints     = null
   }
 }

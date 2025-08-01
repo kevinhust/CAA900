@@ -25,7 +25,7 @@ single_nat_gateway = true
 # ============================================================================
 # DATABASE CONFIGURATION (Cost-optimized)
 # ============================================================================
-postgres_version        = "15.4"
+postgres_version        = "15.13"
 rds_instance_class     = "db.t3.micro"
 rds_allocated_storage  = 20
 rds_max_allocated_storage = 50

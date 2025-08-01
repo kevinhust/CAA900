@@ -66,18 +66,9 @@ resource "aws_security_group" "backend" {
   vpc_id      = var.vpc_id
   description = "Security group for Backend ECS service"
 
-  # HTTP access from ALB
+  # HTTP access from ALB (includes health checks)
   ingress {
     description     = "HTTP from ALB"
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  # Health check from ALB
-  ingress {
-    description     = "Health check from ALB"
     from_port       = 8000
     to_port         = 8000
     protocol        = "tcp"
@@ -318,42 +309,4 @@ resource "aws_security_group" "service_discovery" {
   }
 }
 
-# ============================================================================
-# VPC ENDPOINTS SECURITY GROUP
-# ============================================================================
-
-resource "aws_security_group" "vpc_endpoints" {
-  count = var.enable_vpc_endpoints ? 1 : 0
-
-  name_prefix = "${var.name_prefix}-vpc-endpoints-"
-  vpc_id      = var.vpc_id
-  description = "Security group for VPC endpoints"
-
-  # HTTPS access from private subnets
-  ingress {
-    description = "HTTPS from private subnets"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = var.private_subnet_cidrs
-  }
-
-  # All outbound traffic
-  egress {
-    description = "All outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(var.tags, {
-    Name = "${var.name_prefix}-vpc-endpoints-sg"
-    Type = "Security Group"
-    Component = "VPC Endpoints"
-  })
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
+# VPC Endpoints Security Group moved to VPC module to avoid circular dependencies

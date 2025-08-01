@@ -41,6 +41,17 @@ output "password_secret_name" {
   value       = aws_secretsmanager_secret.db_password.name
 }
 
+output "master_password" {
+  description = "Master password for database connection"
+  value       = random_password.master_password.result
+  sensitive   = true
+}
+
+output "db_password_secret_arn" {
+  description = "ARN of the secret containing the master password"
+  value       = aws_secretsmanager_secret.db_password.arn
+}
+
 output "subnet_group_name" {
   description = "DB subnet group name"
   value       = aws_db_subnet_group.main.name

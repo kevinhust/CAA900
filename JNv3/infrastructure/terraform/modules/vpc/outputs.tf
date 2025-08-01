@@ -79,3 +79,23 @@ output "vpc_endpoint_dynamodb_id" {
   description = "ID of the VPC endpoint for DynamoDB"
   value       = var.enable_vpc_endpoints ? aws_vpc_endpoint.dynamodb[0].id : null
 }
+
+output "vpc_endpoint_ecr_dkr_id" {
+  description = "ID of the VPC endpoint for ECR DKR"
+  value       = var.enable_vpc_endpoints ? aws_vpc_endpoint.ecr_dkr[0].id : null
+}
+
+output "vpc_endpoint_ecr_api_id" {
+  description = "ID of the VPC endpoint for ECR API"
+  value       = var.enable_vpc_endpoints ? aws_vpc_endpoint.ecr_api[0].id : null
+}
+
+output "vpc_endpoint_logs_id" {
+  description = "ID of the VPC endpoint for CloudWatch Logs"
+  value       = var.enable_vpc_endpoints ? aws_vpc_endpoint.logs[0].id : null
+}
+
+output "vpc_endpoints_security_group_id" {
+  description = "ID of the VPC endpoints security group"
+  value       = var.enable_vpc_endpoints ? aws_security_group.vpc_endpoints[0].id : null
+}

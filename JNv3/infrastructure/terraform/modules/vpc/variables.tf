@@ -71,6 +71,12 @@ variable "enable_flow_logs" {
   default     = false
 }
 
+variable "backend_security_group_id" {
+  description = "Security group ID for ECS backend tasks (for VPC endpoint access)"
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
