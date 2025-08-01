@@ -53,7 +53,7 @@ variable "private_subnet_cidrs" {
 variable "database_subnet_cidrs" {
   description = "CIDR blocks for database subnets"
   type        = list(string)
-  default     = ["10.0.20.0/24", "10.0.21.0/24"]
+  default     = ["10.0.30.0/24", "10.0.31.0/24"]
 }
 
 # ============================================================================
