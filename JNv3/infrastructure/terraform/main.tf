@@ -1,5 +1,5 @@
-# JobQuest Navigator v2 - Main Terraform Configuration
-# Container-first Hybrid Architecture for AWS Deployment
+# JobQuest Navigator v3 - Complete Production Application Deployment
+# Single configuration for AWS ECS Fargate + RDS + ALB production environment
 
 terraform {
   required_version = ">= 1.0"
@@ -17,28 +17,25 @@ provider "aws" {
   
   default_tags {
     tags = {
-      Project     = var.project_name
-      Environment = var.environment
+      Project     = "JobQuest Navigator v3"
+      Environment = "Production"
       ManagedBy   = "Terraform"
-      Owner       = var.project_owner
+      Course      = "CAA900"
     }
   }
 }
 
-# Local values for resource naming and configuration
-locals {
-  name_prefix = "${var.project_name}-${var.environment}"
-  
-  # Common tags for all resources
-  common_tags = {
-    Project     = var.project_name
-    Environment = var.environment
-    ManagedBy   = "Terraform"
-    Owner       = var.project_owner
-  }
-  
-  # AZ configuration
-  azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
+# Variables
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Project name"
+  type        = string
+  default     = "jobquest-navigator-v3"
 }
 
 # Data sources
@@ -46,299 +43,660 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_caller_identity" "current" {}
+# Random suffix for unique naming
+resource "random_id" "suffix" {
+  byte_length = 4
+}
 
-# VPC Module
-module "vpc" {
-  source = "./modules/vpc"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  vpc_cidr             = var.vpc_cidr
-  availability_zones   = local.azs
-  public_subnets       = var.public_subnet_cidrs
-  private_subnets      = var.private_subnet_cidrs
-  database_subnets     = var.database_subnet_cidrs
-  
-  enable_nat_gateway   = var.enable_nat_gateway
-  single_nat_gateway   = var.single_nat_gateway
+# ===============================================================================
+# VPC and Networking
+# ===============================================================================
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
-  enable_vpc_endpoints = true
-  
-  # Pass backend security group ID for VPC endpoint access
-  backend_security_group_id = module.security_groups.backend_security_group_id
-  
-  tags = local.common_tags
-}
 
-# Security Groups Module
-module "security_groups" {
-  source = "./modules/security"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  vpc_id      = module.vpc.vpc_id
-  
-  tags = local.common_tags
-}
-
-# ECR Module (for container images)
-module "ecr" {
-  source = "./modules/ecr"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  repositories = [
-    "jobquest-backend",
-    "jobquest-frontend"
-  ]
-  
-  tags = local.common_tags
-}
-
-# RDS Module (PostgreSQL database)
-module "rds" {
-  source = "./modules/rds"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  vpc_id                = module.vpc.vpc_id
-  database_subnet_ids   = module.vpc.database_subnet_ids
-  security_group_ids    = [module.security_groups.rds_security_group_id]
-  
-  # Database configuration
-  engine                = "postgres"
-  engine_version        = var.postgres_version
-  instance_class        = var.rds_instance_class
-  allocated_storage     = var.rds_allocated_storage
-  max_allocated_storage = var.rds_max_allocated_storage
-  storage_encrypted     = true
-  
-  # Database credentials
-  database_name = var.database_name
-  master_username = var.database_username
-  
-  # Backup and maintenance
-  backup_retention_period = var.backup_retention_period
-  backup_window          = var.backup_window
-  maintenance_window     = var.maintenance_window
-  
-  # High availability
-  multi_az = var.environment == "production"
-  
-  # Development-specific overrides
-  deletion_protection = var.environment == "production"
-  skip_final_snapshot = var.environment != "production"
-  
-  tags = local.common_tags
-}
-
-# ElastiCache Module (Redis)
-module "elasticache" {
-  source = "./modules/elasticache"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  vpc_id               = module.vpc.vpc_id
-  subnet_ids           = module.vpc.private_subnet_ids
-  security_group_ids   = [module.security_groups.redis_security_group_id]
-  
-  # Redis configuration
-  node_type           = var.redis_node_type
-  num_cache_nodes     = var.redis_num_nodes
-  parameter_group_name = var.redis_parameter_group
-  engine_version      = var.redis_version
-  port                = 6379
-  
-  tags = local.common_tags
-}
-
-# Application Load Balancer Module
-module "alb" {
-  source = "./modules/alb"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  vpc_id              = module.vpc.vpc_id
-  public_subnet_ids   = module.vpc.public_subnet_ids
-  security_group_ids  = [module.security_groups.alb_security_group_id]
-  
-  # SSL certificate
-  certificate_arn = var.ssl_certificate_arn
-  
-  tags = local.common_tags
-}
-
-# ECS Cluster Module
-module "ecs" {
-  source = "./modules/ecs"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  # Networking
-  vpc_id            = module.vpc.vpc_id
-  private_subnet_ids = module.vpc.private_subnet_ids
-  
-  # Load balancer
-  target_group_arn = module.alb.backend_target_group_arn
-  
-  # Security groups
-  backend_security_group_id  = module.security_groups.backend_security_group_id
-  frontend_security_group_id = module.security_groups.frontend_security_group_id
-  
-  # Container images - use public images if ECR is empty
-  backend_image_uri  = "${module.ecr.repository_urls["jobquest-backend"]}:latest"
-  frontend_image_uri = "${module.ecr.repository_urls["jobquest-frontend"]}:latest"
-  
-  # Environment variables
-  environment_variables = {
-    DATABASE_URL = "postgresql+asyncpg://${var.database_username}:${module.rds.master_password}@${module.rds.endpoint}:5432/${var.database_name}"
-    REDIS_URL    = "redis://${module.elasticache.primary_endpoint}:6379/0"
-    
-    # Application settings
-    ENVIRONMENT  = var.environment
-    DEBUG        = var.environment != "production" ? "true" : "false"
-    SECRET_KEY   = random_password.secret_key.result
-    
-    # AWS Cognito
-    COGNITO_USER_POOL_ID = var.cognito_user_pool_id
-    COGNITO_CLIENT_ID    = var.cognito_client_id
-    AWS_REGION          = var.aws_region
-    
-    # CORS
-    CORS_ORIGINS = var.cors_origins
-    
-    # S3 Configuration
-    AWS_STORAGE_BUCKET_NAME = module.s3.bucket_name
-    AWS_S3_REGION_NAME     = var.aws_region
+  tags = {
+    Name = "${var.project_name}-vpc"
   }
-  
-  # Secrets from Secrets Manager
-  secrets_variables = {
-    DB_PASSWORD = module.rds.db_password_secret_arn
-    APP_SECRET_KEY = aws_secretsmanager_secret.app_secret_key.arn
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.project_name}-igw"
   }
-  
-  # Service configuration
-  backend_cpu    = var.backend_cpu
-  backend_memory = var.backend_memory
-  backend_count  = var.backend_desired_count
-  
-  frontend_cpu    = var.frontend_cpu
-  frontend_memory = var.frontend_memory
-  frontend_count  = var.frontend_desired_count
-  
-  # S3 bucket ARN for task policy
-  s3_bucket_arn = module.s3.bucket_arn
-  
-  tags = local.common_tags
-  
-  depends_on = [module.rds, module.elasticache, module.alb]
 }
 
-# S3 Bucket for file storage
-module "s3" {
-  source = "./modules/s3"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  # Use specific bucket name if provided, otherwise generate name
-  bucket_name = var.s3_bucket_name != "" ? var.s3_bucket_name : "${local.name_prefix}-storage"
-  
-  # Enable versioning for production
-  versioning_enabled = var.environment == "production"
-  
-  tags = local.common_tags
+# Public subnets for ALB
+resource "aws_subnet" "public" {
+  count = 2
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.${count.index + 1}.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-public-subnet-${count.index + 1}"
+    Type = "Public"
+  }
 }
 
-# CloudWatch Module for monitoring
-module "cloudwatch" {
-  source = "./modules/cloudwatch"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  # ECS resources for monitoring
-  ecs_cluster_name = module.ecs.cluster_name
-  ecs_service_names = compact([
-    module.ecs.backend_service_name,
-    module.ecs.frontend_service_name
-  ])
-  
-  # RDS and ElastiCache for monitoring
-  rds_instance_id = module.rds.instance_id
-  elasticache_cluster_id = module.elasticache.cluster_id
-  
-  # ALB for monitoring
-  alb_arn_suffix = module.alb.alb_arn_suffix
-  target_group_arn_suffix = module.alb.backend_target_group_arn_suffix
-  
-  # Disable log metric filters for now until ECS is deployed
-  create_log_metric_filters = false
-  
-  tags = local.common_tags
+# Private subnets for ECS tasks
+resource "aws_subnet" "private" {
+  count = 2
+
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.${count.index + 10}.0/24"
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+
+  tags = {
+    Name = "${var.project_name}-private-subnet-${count.index + 1}"
+    Type = "Private"
+  }
 }
 
-# IAM Module for roles and policies
-module "iam" {
-  source = "./modules/iam"
-  
-  name_prefix = local.name_prefix
-  environment = var.environment
-  
-  # Account ID for ARN construction
-  account_id = data.aws_caller_identity.current.account_id
-  aws_region = var.aws_region
-  
-  # ECR repository ARNs
-  ecr_repository_arns = [for repo in module.ecr.repository_arns : repo]
-  
-  # S3 bucket ARN
-  s3_bucket_arn = module.s3.bucket_arn
-  
-  tags = local.common_tags
+# Database subnets
+resource "aws_subnet" "database" {
+  count = 2
+
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.${count.index + 20}.0/24"
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+
+  tags = {
+    Name = "${var.project_name}-db-subnet-${count.index + 1}"
+    Type = "Database"
+  }
 }
 
-# Random passwords for sensitive data
+# NAT Gateway
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+
+  tags = {
+    Name = "${var.project_name}-nat-gateway"
+  }
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+# Route tables
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-public-rt"
+  }
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-private-rt"
+  }
+}
+
+# Route table associations
+resource "aws_route_table_association" "public" {
+  count = 2
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "private" {
+  count = 2
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+
+# ===============================================================================
+# Security Groups
+# ===============================================================================
+
+resource "aws_security_group" "alb" {
+  name        = "${var.project_name}-alb-sg"
+  description = "Security group for Application Load Balancer"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-alb-sg"
+  }
+}
+
+resource "aws_security_group" "ecs" {
+  name        = "${var.project_name}-ecs-sg"
+  description = "Security group for ECS tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  ingress {
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-ecs-sg"
+  }
+}
+
+resource "aws_security_group" "rds" {
+  name        = "${var.project_name}-rds-sg"
+  description = "Security group for RDS database"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-rds-sg"
+  }
+}
+
+# ===============================================================================
+# RDS PostgreSQL Database
+# ===============================================================================
+
+resource "aws_db_subnet_group" "main" {
+  name       = "${var.project_name}-db-subnet-group"
+  subnet_ids = aws_subnet.database[*].id
+
+  tags = {
+    Name = "${var.project_name}-db-subnet-group"
+  }
+}
+
 resource "random_password" "db_password" {
   length  = 16
   special = true
 }
 
-resource "random_password" "secret_key" {
-  length  = 32
-  special = true
-}
-
-# Store secrets in AWS Secrets Manager
-resource "aws_secretsmanager_secret" "db_password" {
-  name        = "${local.name_prefix}-db-password"
-  description = "Database password for ${var.project_name}"
+resource "aws_db_instance" "main" {
+  allocated_storage      = 20
+  max_allocated_storage  = 100
+  storage_type           = "gp2"
+  engine                 = "postgres"
+  engine_version         = "15.4"
+  instance_class         = "db.t3.micro"
+  identifier             = "${var.project_name}-db-${random_id.suffix.hex}"
   
-  tags = local.common_tags
+  db_name  = "jobquest"
+  username = "jobquest_user"
+  password = random_password.db_password.result
+
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+
+  backup_retention_period = 7
+  backup_window          = "07:00-09:00"
+  maintenance_window     = "sun:09:00-sun:11:00"
+
+  skip_final_snapshot = true
+  deletion_protection = false
+
+  tags = {
+    Name = "${var.project_name}-database"
+  }
 }
 
-resource "aws_secretsmanager_secret_version" "db_password" {
-  secret_id     = aws_secretsmanager_secret.db_password.id
-  secret_string = random_password.db_password.result
+# ===============================================================================
+# Application Load Balancer
+# ===============================================================================
+
+resource "aws_lb" "main" {
+  name               = "${var.project_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets           = aws_subnet.public[*].id
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "${var.project_name}-alb"
+  }
 }
 
-resource "aws_secretsmanager_secret" "app_secret_key" {
-  name        = "${local.name_prefix}-app-secret-key"
-  description = "Application secret key for ${var.project_name}"
-  
-  tags = local.common_tags
+resource "aws_lb_target_group" "backend" {
+  name        = "jqnav-v3-backend-tg"
+  port        = 8000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    interval            = 30
+    matcher             = "200"
+    path                = "/health"
+    port                = "traffic-port"
+    protocol            = "HTTP"
+    timeout             = 5
+    unhealthy_threshold = 2
+  }
+
+  tags = {
+    Name = "${var.project_name}-backend-tg"
+  }
 }
 
-resource "aws_secretsmanager_secret_version" "app_secret_key" {
-  secret_id     = aws_secretsmanager_secret.app_secret_key.id
-  secret_string = random_password.secret_key.result
+resource "aws_lb_target_group" "frontend" {
+  name        = "jqnav-v3-frontend-tg"
+  port        = 3000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    interval            = 30
+    matcher             = "200"
+    path                = "/"
+    port                = "traffic-port"
+    protocol            = "HTTP"
+    timeout             = 5
+    unhealthy_threshold = 2
+  }
+
+  tags = {
+    Name = "${var.project_name}-frontend-tg"
+  }
+}
+
+resource "aws_lb_listener" "main" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend.arn
+  }
+}
+
+resource "aws_lb_listener_rule" "backend" {
+  listener_arn = aws_lb_listener.main.arn
+  priority     = 100
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/api/*", "/graphql/*", "/health"]
+    }
+  }
+}
+
+# ===============================================================================
+# ECR Repositories
+# ===============================================================================
+
+resource "aws_ecr_repository" "backend" {
+  name                 = "${var.project_name}-backend"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "${var.project_name}-backend-repo"
+  }
+}
+
+resource "aws_ecr_repository" "frontend" {
+  name                 = "${var.project_name}-frontend"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "${var.project_name}-frontend-repo"
+  }
+}
+
+# ===============================================================================
+# ECS Cluster and Services
+# ===============================================================================
+
+resource "aws_ecs_cluster" "main" {
+  name = "${var.project_name}-cluster"
+
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+
+  tags = {
+    Name = "${var.project_name}-cluster"
+  }
+}
+
+# CloudWatch Log Groups
+resource "aws_cloudwatch_log_group" "backend" {
+  name              = "/ecs/${var.project_name}/backend"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${var.project_name}-backend-logs"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "frontend" {
+  name              = "/ecs/${var.project_name}/frontend"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${var.project_name}-frontend-logs"
+  }
+}
+
+# ECS Task Execution Role
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "${var.project_name}-ecs-execution-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name}-ecs-execution-role"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# ECS Task Definitions (Using placeholder images - will be updated by CI/CD pipeline)
+resource "aws_ecs_task_definition" "backend" {
+  family                   = "${var.project_name}-backend"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "backend"
+      # Placeholder image - will be replaced with actual ECR image by CI/CD pipeline
+      image = "public.ecr.aws/docker/library/python:3.11-slim"
+      
+      portMappings = [
+        {
+          containerPort = 8000
+          hostPort      = 8000
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "DATABASE_URL"
+          value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:5432/${aws_db_instance.main.db_name}"
+        },
+        {
+          name  = "ENVIRONMENT"
+          value = "production"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.backend.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+
+      essential = true
+    }
+  ])
+
+  tags = {
+    Name = "${var.project_name}-backend-task"
+  }
+}
+
+resource "aws_ecs_task_definition" "frontend" {
+  family                   = "${var.project_name}-frontend"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "frontend"
+      # Placeholder image - will be replaced with actual ECR image by CI/CD pipeline
+      image = "public.ecr.aws/docker/library/node:18-alpine"
+      
+      portMappings = [
+        {
+          containerPort = 3000
+          hostPort      = 3000
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "REACT_APP_API_URL"
+          value = "http://${aws_lb.main.dns_name}/api"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.frontend.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+
+      essential = true
+    }
+  ])
+
+  tags = {
+    Name = "${var.project_name}-frontend-task"
+  }
+}
+
+# ECS Services (Initially with 0 desired count - will be updated after Docker images are pushed)
+resource "aws_ecs_service" "backend" {
+  name            = "${var.project_name}-backend-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.backend.arn
+  desired_count   = 0  # Start with 0, update after images are available
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.backend.arn
+    container_name   = "backend"
+    container_port   = 8000
+  }
+
+  depends_on = [aws_lb_listener.main]
+
+  tags = {
+    Name = "${var.project_name}-backend-service"
+  }
+}
+
+resource "aws_ecs_service" "frontend" {
+  name            = "${var.project_name}-frontend-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.frontend.arn
+  desired_count   = 0  # Start with 0, update after images are available
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.frontend.arn
+    container_name   = "frontend"
+    container_port   = 3000
+  }
+
+  depends_on = [aws_lb_listener.main]
+
+  tags = {
+    Name = "${var.project_name}-frontend-service"
+  }
+}
+
+# ===============================================================================
+# Outputs
+# ===============================================================================
+
+output "load_balancer_dns" {
+  description = "DNS name of the load balancer"
+  value       = aws_lb.main.dns_name
+}
+
+output "application_url" {
+  description = "URL of the deployed application"
+  value       = "http://${aws_lb.main.dns_name}"
+}
+
+output "backend_ecr_repository_url" {
+  description = "URL of the ECR repository for backend"
+  value       = aws_ecr_repository.backend.repository_url
+}
+
+output "frontend_ecr_repository_url" {
+  description = "URL of the ECR repository for frontend"
+  value       = aws_ecr_repository.frontend.repository_url
+}
+
+output "database_endpoint" {
+  description = "RDS database endpoint"
+  value       = aws_db_instance.main.endpoint
+  sensitive   = true
+}
+
+output "database_connection_string" {
+  description = "Database connection string"
+  value       = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:5432/${aws_db_instance.main.db_name}"
+  sensitive   = true
+}
+
+output "ecs_cluster_name" {
+  description = "Name of the ECS cluster"
+  value       = aws_ecs_cluster.main.name
+}
+
+output "deployment_info" {
+  description = "Complete deployment information"
+  value = {
+    application_url   = "http://${aws_lb.main.dns_name}"
+    backend_repo_url  = aws_ecr_repository.backend.repository_url
+    frontend_repo_url = aws_ecr_repository.frontend.repository_url
+    cluster_name      = aws_ecs_cluster.main.name
+    database_endpoint = aws_db_instance.main.endpoint
+  }
 }

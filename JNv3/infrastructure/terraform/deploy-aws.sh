@@ -12,10 +12,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-ENVIRONMENT=${1:-development}
+# Configuration - Production Only
+ENVIRONMENT="production"
 TERRAFORM_DIR="/Users/kevinwang/Documents/Projects/CAA900/JNv3/infrastructure/terraform"
-TFVARS_FILE="environments/${ENVIRONMENT}.tfvars"
 
 # Function to print colored output
 print_status() {
@@ -58,11 +57,8 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check if tfvars file exists
-    if [[ ! -f "$TFVARS_FILE" ]]; then
-        print_error "Environment file $TFVARS_FILE not found."
-        exit 1
-    fi
+    # Production environment uses embedded variables in main.tf
+    print_status "Using production configuration from main.tf"
     
     print_status "Prerequisites check passed"
 }
@@ -147,7 +143,7 @@ plan_deployment() {
     cd "$TERRAFORM_DIR"
     
     # Run terraform plan
-    terraform plan -var-file="$TFVARS_FILE" -out="deployment-plan"
+    terraform plan -out="deployment-plan"
     
     print_status "Terraform plan completed"
     
@@ -218,7 +214,7 @@ main() {
     print_header "JobQuest Navigator v3 - AWS Deployment"
     print_status "Environment: $ENVIRONMENT"
     print_status "Terraform Directory: $TERRAFORM_DIR"
-    print_status "Variables File: $TFVARS_FILE"
+    print_status "Configuration: Production (embedded in main.tf)"
     
     echo
     
