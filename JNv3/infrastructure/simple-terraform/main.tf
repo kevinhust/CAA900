@@ -1,5 +1,5 @@
-# Complete JobQuest Navigator v3 Application Deployment
-# AWS ECS Fargate + RDS + ElastiCache + ALB
+# JobQuest Navigator v3 - Complete Production Application Deployment
+# Single configuration for AWS ECS Fargate + RDS + ALB production environment
 
 terraform {
   required_version = ">= 1.0"
@@ -18,7 +18,7 @@ provider "aws" {
   default_tags {
     tags = {
       Project     = "JobQuest Navigator v3"
-      Environment = "CAA900-Production"
+      Environment = "Production"
       ManagedBy   = "Terraform"
       Course      = "CAA900"
     }

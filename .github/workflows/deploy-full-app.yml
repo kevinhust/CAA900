@@ -1,4 +1,4 @@
-name: Deploy Full JobQuest Navigator v3 Application
+name: Deploy JobQuest Navigator v3 Production Application
 
 on:
   push:
@@ -7,15 +7,6 @@ on:
       - 'JNv3/**'
       - '.github/workflows/**'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-        - production
-        - staging
 
 env:
   AWS_REGION: us-east-1
@@ -55,21 +46,21 @@ jobs:
         cd JNv3/infrastructure/simple-terraform
         terraform init -backend=false
     
-    - name: Terraform Plan (Full Application)
+    - name: Terraform Plan
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
       run: |
         cd JNv3/infrastructure/simple-terraform
-        terraform plan full-app-deployment.tf -no-color
+        terraform plan -no-color
     
-    - name: Terraform Apply (Full Application)
+    - name: Terraform Apply
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
       run: |
         cd JNv3/infrastructure/simple-terraform
-        terraform apply -auto-approve full-app-deployment.tf -no-color
+        terraform apply -auto-approve -no-color
     
     - name: Get deployment outputs
       id: terraform-outputs
