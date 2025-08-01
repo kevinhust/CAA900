@@ -14,7 +14,7 @@ terraform {
 # Configure the AWS Provider
 provider "aws" {
   region = var.aws_region
-  
+
   default_tags {
     tags = {
       Project     = "JobQuest Navigator v3"
@@ -23,19 +23,6 @@ provider "aws" {
       Course      = "CAA900"
     }
   }
-}
-
-# Variables
-variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "project_name" {
-  description = "Project name"
-  type        = string
-  default     = "jobquest-navigator-v3"
 }
 
 # Data sources
@@ -53,7 +40,7 @@ resource "random_id" "suffix" {
 # ===============================================================================
 
 resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
+  cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
 
@@ -75,7 +62,7 @@ resource "aws_subnet" "public" {
   count = 2
 
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.${count.index + 1}.0/24"
+  cidr_block              = var.public_subnet_cidrs[count.index]
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
@@ -90,7 +77,7 @@ resource "aws_subnet" "private" {
   count = 2
 
   vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.${count.index + 10}.0/24"
+  cidr_block        = var.private_subnet_cidrs[count.index]
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
   tags = {
@@ -104,7 +91,7 @@ resource "aws_subnet" "database" {
   count = 2
 
   vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.${count.index + 20}.0/24"
+  cidr_block        = var.database_subnet_cidrs[count.index]
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
   tags = {
@@ -284,27 +271,27 @@ resource "random_password" "db_password" {
 }
 
 resource "aws_db_instance" "main" {
-  allocated_storage      = 20
-  max_allocated_storage  = 100
-  storage_type           = "gp2"
-  engine                 = "postgres"
-  engine_version         = "15.4"
-  instance_class         = "db.t3.micro"
-  identifier             = "${var.project_name}-db-${random_id.suffix.hex}"
-  
-  db_name  = "jobquest"
-  username = "jobquest_user"
+  allocated_storage     = var.rds_allocated_storage
+  max_allocated_storage = var.rds_max_allocated_storage
+  storage_type          = "gp2"
+  engine                = "postgres"
+  engine_version        = var.postgres_version
+  instance_class        = var.rds_instance_class
+  identifier            = "${var.project_name}-db-${random_id.suffix.hex}"
+
+  db_name  = var.database_name
+  username = var.database_username
   password = random_password.db_password.result
 
   vpc_security_group_ids = [aws_security_group.rds.id]
   db_subnet_group_name   = aws_db_subnet_group.main.name
 
-  backup_retention_period = 7
-  backup_window          = "07:00-09:00"
-  maintenance_window     = "sun:09:00-sun:11:00"
+  backup_retention_period = var.backup_retention_period
+  backup_window           = var.backup_window
+  maintenance_window      = var.maintenance_window
 
-  skip_final_snapshot = true
-  deletion_protection = false
+  skip_final_snapshot = var.skip_final_snapshot
+  deletion_protection = var.enable_deletion_protection
 
   tags = {
     Name = "${var.project_name}-database"
@@ -320,9 +307,9 @@ resource "aws_lb" "main" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets           = aws_subnet.public[*].id
+  subnets            = aws_subnet.public[*].id
 
-  enable_deletion_protection = false
+  enable_deletion_protection = var.enable_deletion_protection
 
   tags = {
     Name = "${var.project_name}-alb"
@@ -330,8 +317,8 @@ resource "aws_lb" "main" {
 }
 
 resource "aws_lb_target_group" "backend" {
-  name        = "jqnav-v3-backend-tg"
-  port        = 8000
+  name        = var.backend_target_group_name
+  port        = var.backend_port
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
@@ -341,7 +328,7 @@ resource "aws_lb_target_group" "backend" {
     healthy_threshold   = 2
     interval            = 30
     matcher             = "200"
-    path                = "/health"
+    path                = var.health_check_path
     port                = "traffic-port"
     protocol            = "HTTP"
     timeout             = 5
@@ -354,8 +341,8 @@ resource "aws_lb_target_group" "backend" {
 }
 
 resource "aws_lb_target_group" "frontend" {
-  name        = "jqnav-v3-frontend-tg"
-  port        = 3000
+  name        = var.frontend_target_group_name
+  port        = var.frontend_port
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
@@ -379,7 +366,7 @@ resource "aws_lb_target_group" "frontend" {
 
 resource "aws_lb_listener" "main" {
   load_balancer_arn = aws_lb.main.arn
-  port              = "80"
+  port              = tostring(var.alb_port)
   protocol          = "HTTP"
 
   default_action {
@@ -399,7 +386,7 @@ resource "aws_lb_listener_rule" "backend" {
 
   condition {
     path_pattern {
-      values = ["/api/*", "/graphql/*", "/health"]
+      values = var.api_path_patterns
     }
   }
 }
@@ -443,7 +430,7 @@ resource "aws_ecs_cluster" "main" {
 
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = var.enable_container_insights ? "enabled" : "disabled"
   }
 
   tags = {
@@ -454,7 +441,7 @@ resource "aws_ecs_cluster" "main" {
 # CloudWatch Log Groups
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${var.project_name}/backend"
-  retention_in_days = 30
+  retention_in_days = var.log_retention_days
 
   tags = {
     Name = "${var.project_name}-backend-logs"
@@ -463,7 +450,7 @@ resource "aws_cloudwatch_log_group" "backend" {
 
 resource "aws_cloudwatch_log_group" "frontend" {
   name              = "/ecs/${var.project_name}/frontend"
-  retention_in_days = 30
+  retention_in_days = var.log_retention_days
 
   tags = {
     Name = "${var.project_name}-frontend-logs"
@@ -502,20 +489,20 @@ resource "aws_ecs_task_definition" "backend" {
   family                   = "${var.project_name}-backend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = tostring(var.backend_cpu)
+  memory                   = tostring(var.backend_memory)
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
     {
-      name  = "backend"
+      name = "backend"
       # Placeholder image - will be replaced with actual ECR image by CI/CD pipeline
       image = "public.ecr.aws/docker/library/python:3.11-slim"
-      
+
       portMappings = [
         {
-          containerPort = 8000
-          hostPort      = 8000
+          containerPort = var.backend_port
+          hostPort      = var.backend_port
           protocol      = "tcp"
         }
       ]
@@ -553,20 +540,20 @@ resource "aws_ecs_task_definition" "frontend" {
   family                   = "${var.project_name}-frontend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = tostring(var.frontend_cpu)
+  memory                   = tostring(var.frontend_memory)
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
     {
-      name  = "frontend"
+      name = "frontend"
       # Placeholder image - will be replaced with actual ECR image by CI/CD pipeline
       image = "public.ecr.aws/docker/library/node:18-alpine"
-      
+
       portMappings = [
         {
-          containerPort = 3000
-          hostPort      = 3000
+          containerPort = var.frontend_port
+          hostPort      = var.frontend_port
           protocol      = "tcp"
         }
       ]
@@ -601,7 +588,7 @@ resource "aws_ecs_service" "backend" {
   name            = "${var.project_name}-backend-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.backend.arn
-  desired_count   = 0  # Start with 0, update after images are available
+  desired_count   = var.backend_desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -613,7 +600,7 @@ resource "aws_ecs_service" "backend" {
   load_balancer {
     target_group_arn = aws_lb_target_group.backend.arn
     container_name   = "backend"
-    container_port   = 8000
+    container_port   = var.backend_port
   }
 
   depends_on = [aws_lb_listener.main]
@@ -627,7 +614,7 @@ resource "aws_ecs_service" "frontend" {
   name            = "${var.project_name}-frontend-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.frontend.arn
-  desired_count   = 0  # Start with 0, update after images are available
+  desired_count   = var.frontend_desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -639,7 +626,7 @@ resource "aws_ecs_service" "frontend" {
   load_balancer {
     target_group_arn = aws_lb_target_group.frontend.arn
     container_name   = "frontend"
-    container_port   = 3000
+    container_port   = var.frontend_port
   }
 
   depends_on = [aws_lb_listener.main]
@@ -649,54 +636,3 @@ resource "aws_ecs_service" "frontend" {
   }
 }
 
-# ===============================================================================
-# Outputs
-# ===============================================================================
-
-output "load_balancer_dns" {
-  description = "DNS name of the load balancer"
-  value       = aws_lb.main.dns_name
-}
-
-output "application_url" {
-  description = "URL of the deployed application"
-  value       = "http://${aws_lb.main.dns_name}"
-}
-
-output "backend_ecr_repository_url" {
-  description = "URL of the ECR repository for backend"
-  value       = aws_ecr_repository.backend.repository_url
-}
-
-output "frontend_ecr_repository_url" {
-  description = "URL of the ECR repository for frontend"
-  value       = aws_ecr_repository.frontend.repository_url
-}
-
-output "database_endpoint" {
-  description = "RDS database endpoint"
-  value       = aws_db_instance.main.endpoint
-  sensitive   = true
-}
-
-output "database_connection_string" {
-  description = "Database connection string"
-  value       = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:5432/${aws_db_instance.main.db_name}"
-  sensitive   = true
-}
-
-output "ecs_cluster_name" {
-  description = "Name of the ECS cluster"
-  value       = aws_ecs_cluster.main.name
-}
-
-output "deployment_info" {
-  description = "Complete deployment information"
-  value = {
-    application_url   = "http://${aws_lb.main.dns_name}"
-    backend_repo_url  = aws_ecr_repository.backend.repository_url
-    frontend_repo_url = aws_ecr_repository.frontend.repository_url
-    cluster_name      = aws_ecs_cluster.main.name
-    database_endpoint = aws_db_instance.main.endpoint
-  }
-}
