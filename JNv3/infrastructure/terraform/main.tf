@@ -484,6 +484,50 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# ECS Task Role (for application runtime permissions)
+resource "aws_iam_role" "ecs_task_role" {
+  name = "${var.project_name}-ecs-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name}-ecs-task-role"
+  }
+}
+
+# Task role policy for basic AWS services access
+resource "aws_iam_role_policy" "ecs_task_policy" {
+  name = "${var.project_name}-ecs-task-policy"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:*:*"
+      }
+    ]
+  })
+}
+
 # ECS Task Definitions (Using placeholder images - will be updated by CI/CD pipeline)
 resource "aws_ecs_task_definition" "backend" {
   family                   = "${var.project_name}-backend"
@@ -492,6 +536,7 @@ resource "aws_ecs_task_definition" "backend" {
   cpu                      = tostring(var.backend_cpu)
   memory                   = tostring(var.backend_memory)
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -510,11 +555,35 @@ resource "aws_ecs_task_definition" "backend" {
       environment = [
         {
           name  = "DATABASE_URL"
-          value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:5432/${aws_db_instance.main.db_name}"
+          value = "postgresql+asyncpg://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:5432/${aws_db_instance.main.db_name}"
         },
         {
           name  = "ENVIRONMENT"
           value = "production"
+        },
+        {
+          name  = "SECRET_KEY"
+          value = var.secret_key
+        },
+        {
+          name  = "AWS_DEFAULT_REGION"
+          value = var.aws_region
+        },
+        {
+          name  = "CORS_ORIGINS"
+          value = "http://${aws_lb.main.dns_name}"
+        },
+        {
+          name  = "LOG_LEVEL"
+          value = "info"
+        },
+        {
+          name  = "DEBUG"
+          value = "false"
+        },
+        {
+          name  = "WORKERS"
+          value = "2"
         }
       ]
 
@@ -543,6 +612,7 @@ resource "aws_ecs_task_definition" "frontend" {
   cpu                      = tostring(var.frontend_cpu)
   memory                   = tostring(var.frontend_memory)
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -562,6 +632,18 @@ resource "aws_ecs_task_definition" "frontend" {
         {
           name  = "REACT_APP_API_URL"
           value = "http://${aws_lb.main.dns_name}/api"
+        },
+        {
+          name  = "REACT_APP_GRAPHQL_URL"
+          value = "http://${aws_lb.main.dns_name}/graphql"
+        },
+        {
+          name  = "NODE_ENV"
+          value = "production"
+        },
+        {
+          name  = "REACT_APP_ENV"
+          value = "production"
         }
       ]
 

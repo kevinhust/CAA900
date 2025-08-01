@@ -111,6 +111,29 @@ jobs:
       run: |
         aws ecs describe-task-definition --task-definition $BACKEND_TASK_DEFINITION --query taskDefinition > backend-task-definition.json
 
+    - name: Update backend task definition environment variables
+      run: |
+        # Get ALB DNS name for CORS configuration
+        ALB_DNS=$(aws elbv2 describe-load-balancers --names "jobquest-navigator-v3-alb" --query 'LoadBalancers[0].DNSName' --output text)
+        
+        # Update environment variables in task definition (AWS credentials handled by ECS task role)
+        jq --arg cors_origin "http://$ALB_DNS" \
+           --arg secret_key "${{ secrets.SECRET_KEY }}" \
+           --arg aws_region "$AWS_REGION" \
+           --arg log_level "info" \
+           --arg debug "false" \
+           --arg workers "2" \
+           '.containerDefinitions[0].environment = [
+             (.containerDefinitions[0].environment[] | select(.name != "SECRET_KEY" and .name != "AWS_DEFAULT_REGION" and .name != "CORS_ORIGINS" and .name != "LOG_LEVEL" and .name != "DEBUG" and .name != "WORKERS")),
+             {"name": "SECRET_KEY", "value": $secret_key},
+             {"name": "AWS_DEFAULT_REGION", "value": $aws_region},
+             {"name": "CORS_ORIGINS", "value": $cors_origin},
+             {"name": "LOG_LEVEL", "value": $log_level},
+             {"name": "DEBUG", "value": $debug},
+             {"name": "WORKERS", "value": $workers}
+           ]' backend-task-definition.json > backend-task-definition-updated.json
+        mv backend-task-definition-updated.json backend-task-definition.json
+
     - name: Fill in the new image ID in the Amazon ECS backend task definition
       id: backend-task-def
       uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -130,6 +153,25 @@ jobs:
     - name: Download frontend task definition
       run: |
         aws ecs describe-task-definition --task-definition $FRONTEND_TASK_DEFINITION --query taskDefinition > frontend-task-definition.json
+
+    - name: Update frontend task definition environment variables
+      run: |
+        # Get ALB DNS name for API configuration
+        ALB_DNS=$(aws elbv2 describe-load-balancers --names "jobquest-navigator-v3-alb" --query 'LoadBalancers[0].DNSName' --output text)
+        
+        # Update environment variables in task definition
+        jq --arg api_url "http://$ALB_DNS/api" \
+           --arg graphql_url "http://$ALB_DNS/graphql" \
+           --arg node_env "production" \
+           --arg react_env "production" \
+           '.containerDefinitions[0].environment = [
+             (.containerDefinitions[0].environment[] | select(.name != "REACT_APP_API_URL" and .name != "REACT_APP_GRAPHQL_URL" and .name != "NODE_ENV" and .name != "REACT_APP_ENV")),
+             {"name": "REACT_APP_API_URL", "value": $api_url},
+             {"name": "REACT_APP_GRAPHQL_URL", "value": $graphql_url},
+             {"name": "NODE_ENV", "value": $node_env},
+             {"name": "REACT_APP_ENV", "value": $react_env}
+           ]' frontend-task-definition.json > frontend-task-definition-updated.json
+        mv frontend-task-definition-updated.json frontend-task-definition.json
 
     - name: Fill in the new image ID in the Amazon ECS frontend task definition
       id: frontend-task-def

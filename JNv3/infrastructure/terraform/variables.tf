@@ -28,6 +28,17 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "secret_key" {
+  description = "Secret key for application security"
+  type        = string
+  sensitive   = true
+  
+  validation {
+    condition     = length(var.secret_key) >= 32
+    error_message = "Secret key must be at least 32 characters long."
+  }
+}
+
 # ============================================================================
 # NETWORKING CONFIGURATION
 # ============================================================================
