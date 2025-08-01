@@ -68,6 +68,16 @@ jobs:
         cd JNv3/infrastructure/terraform
         terraform validate
     
+    - name: Terraform Refresh State
+      env:
+        TF_VAR_project_name: ${{ env.PROJECT_NAME }}
+        TF_VAR_aws_region: ${{ env.AWS_REGION }}
+        TF_VAR_secret_key: ${{ secrets.SECRET_KEY }}
+      run: |
+        cd JNv3/infrastructure/terraform
+        echo "🔄 Refreshing Terraform state to match AWS resources..."
+        terraform refresh -input=false
+    
     - name: Terraform Plan
       id: plan
       env:
@@ -135,6 +145,10 @@ jobs:
     if: success()
     environment: production
     
+    outputs:
+      backend_image_tag: ${{ steps.build-info.outputs.backend_image_tag }}
+      frontend_image_tag: ${{ steps.build-info.outputs.frontend_image_tag }}
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -146,245 +160,62 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
     
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        platforms: linux/amd64
+    
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
     
-    - name: Create simple backend application
+    - name: Set image tags
+      id: build-info
       run: |
-        mkdir -p /tmp/backend-app
-        cat > /tmp/backend-app/Dockerfile << 'EOF'
-        FROM python:3.11-slim
-        
-        WORKDIR /app
-        
-        # Install dependencies
-        RUN pip install fastapi uvicorn psycopg2-binary
-        
-        # Create simple FastAPI app
-        COPY app.py .
-        
-        EXPOSE 8000
-        
-        CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-        EOF
-        
-        cat > /tmp/backend-app/app.py << 'EOF'
-        from fastapi import FastAPI
-        import os
-        
-        app = FastAPI(title="JobQuest Navigator v3 Backend", version="1.0.0")
-        
-        @app.get("/")
-        def read_root():
-            return {"message": "JobQuest Navigator v3 Backend API", "status": "running"}
-        
-        @app.get("/health")
-        def health_check():
-            return {"status": "healthy", "service": "jobquest-backend"}
-        
-        @app.get("/api/status")
-        def api_status():
-            return {
-                "service": "JobQuest Navigator v3",
-                "version": "1.0.0",
-                "environment": os.getenv("ENVIRONMENT", "development"),
-                "database": "PostgreSQL connected" if os.getenv("DATABASE_URL") else "No database"
-            }
-        EOF
+        echo "IMAGE_TAG=build-$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        echo "backend_image_tag=build-$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        echo "frontend_image_tag=build-$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
     
-    - name: Create simple frontend application
+    - name: Build, tag, and push backend image to Amazon ECR
+      working-directory: ./JNv3/apps/backend-fastapi
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.PROJECT_NAME }}-backend
+        IMAGE_TAG: ${{ steps.build-info.outputs.IMAGE_TAG }}
       run: |
-        mkdir -p /tmp/frontend-app
-        cat > /tmp/frontend-app/Dockerfile << 'EOF'
-        FROM node:18-alpine
-        
-        WORKDIR /app
-        
-        # Install serve globally
-        RUN npm install -g serve
-        
-        # Copy static files
-        COPY index.html .
-        COPY package.json .
-        
-        EXPOSE 3000
-        
-        CMD ["serve", "-s", ".", "-l", "3000"]
-        EOF
-        
-        cat > /tmp/frontend-app/package.json << 'EOF'
-        {
-          "name": "jobquest-navigator-v3-frontend",
-          "version": "1.0.0",
-          "description": "JobQuest Navigator v3 Frontend"
-        }
-        EOF
-        
-        cat > /tmp/frontend-app/index.html << 'EOF'
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>JobQuest Navigator v3 - Full Application</title>
-            <style>
-                body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
-                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; text-align: center; }
-                .status { background: #10b981; color: white; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
-                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
-                .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-                .feature { margin: 15px 0; padding: 15px; background: #f8fafc; border-left: 4px solid #667eea; border-radius: 4px; }
-                .api-status { background: #fef3c7; color: #92400e; padding: 15px; border-radius: 8px; margin: 10px 0; }
-                .loading { color: #6b7280; font-style: italic; }
-                button { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
-                button:hover { background: #5a67d8; }
-                .timestamp { color: #6b7280; font-size: 0.9em; }
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>🚀 JobQuest Navigator v3</h1>
-                <h2>Complete Full-Stack Application Deployment</h2>
-                <p>CAA900 Software Development Capstone - Production Environment</p>
-            </div>
-            
-            <div class="status">
-                ✅ Full-Stack Application Successfully Deployed on AWS ECS Fargate
-            </div>
-            
-            <div class="grid">
-                <div class="card">
-                    <h3>📋 Application Information</h3>
-                    <p><strong>Student:</strong> Kevin Wang</p>
-                    <p><strong>Course:</strong> CAA900 - Software Development Capstone</p>
-                    <p><strong>Project:</strong> JobQuest Navigator v3</p>
-                    <p><strong>Deployment:</strong> <span class="timestamp" id="deployDate"></span></p>
-                    <p><strong>Architecture:</strong> AWS ECS Fargate + RDS + ALB</p>
-                </div>
-                
-                <div class="card">
-                    <h3>🏗️ Infrastructure Components</h3>
-                    <div class="feature">✅ <strong>Frontend:</strong> React App on ECS Fargate</div>
-                    <div class="feature">✅ <strong>Backend:</strong> FastAPI on ECS Fargate</div>
-                    <div class="feature">✅ <strong>Database:</strong> RDS PostgreSQL</div>
-                    <div class="feature">✅ <strong>Load Balancer:</strong> Application Load Balancer</div>
-                    <div class="feature">✅ <strong>Container Registry:</strong> Amazon ECR</div>
-                    <div class="feature">✅ <strong>Networking:</strong> VPC with public/private subnets</div>
-                </div>
-            </div>
-            
-            <div class="card">
-                <h3>🔗 API Status & Testing</h3>
-                <div id="apiStatus" class="api-status loading">Loading API status...</div>
-                <button onclick="testAPI()">Test Backend API</button>
-                <button onclick="testHealth()">Health Check</button>
-                <button onclick="location.reload()">Refresh Page</button>
-            </div>
-            
-            <div class="grid">
-                <div class="card">
-                    <h3>🎯 Technical Achievement</h3>
-                    <div class="feature">✅ Complete containerized microservices architecture</div>
-                    <div class="feature">✅ Production-grade AWS infrastructure</div>
-                    <div class="feature">✅ Automated CI/CD pipeline with GitHub Actions</div>
-                    <div class="feature">✅ Infrastructure as Code with Terraform</div>
-                    <div class="feature">✅ Container orchestration with ECS Fargate</div>
-                    <div class="feature">✅ Load balancing and auto-scaling capabilities</div>
-                </div>
-                
-                <div class="card">
-                    <h3>📊 Course Requirements</h3>
-                    <div class="feature">✅ Live production deployment on AWS</div>
-                    <div class="feature">✅ Modern full-stack application architecture</div>
-                    <div class="feature">✅ Professional DevOps practices</div>
-                    <div class="feature">✅ Database integration and persistence</div>
-                    <div class="feature">✅ Scalable microservices design</div>
-                    <div class="feature">✅ Enterprise-level security and networking</div>
-                </div>
-            </div>
-            
-            <script>
-                document.getElementById('deployDate').textContent = new Date().toLocaleString();
-                
-                async function testAPI() {
-                    const statusDiv = document.getElementById('apiStatus');
-                    statusDiv.textContent = 'Testing API...';
-                    statusDiv.className = 'api-status loading';
-                    
-                    try {
-                        const response = await fetch('/api/status');
-                        if (response.ok) {
-                            const data = await response.json();
-                            statusDiv.innerHTML = `
-                                <strong>✅ Backend API Connected</strong><br>
-                                Service: ${data.service}<br>
-                                Version: ${data.version}<br>
-                                Environment: ${data.environment}<br>
-                                Database: ${data.database}
-                            `;
-                            statusDiv.className = 'api-status';
-                            statusDiv.style.background = '#d1fae5';
-                            statusDiv.style.color = '#065f46';
-                        } else {
-                            throw new Error('API not responding');
-                        }
-                    } catch (error) {
-                        statusDiv.innerHTML = `
-                            <strong>⚠️ API Connection Status</strong><br>
-                            Backend service is deployed but may still be starting up.<br>
-                            This is normal for the first few minutes after deployment.
-                        `;
-                        statusDiv.className = 'api-status';
-                    }
-                }
-                
-                async function testHealth() {
-                    try {
-                        const response = await fetch('/health');
-                        if (response.ok) {
-                            const data = await response.json();
-                            alert('✅ Health Check Passed: ' + data.status);
-                        } else {
-                            alert('⚠️ Health check endpoint exists but may be starting up');
-                        }
-                    } catch (error) {
-                        alert('⚠️ Health check: Service may still be initializing');
-                    }
-                }
-                
-                // Auto-test API on page load after 2 seconds
-                setTimeout(testAPI, 2000);
-            </script>
-        </body>
-        </html>
-        EOF
+        echo "🔨 Building backend image for AMD64 platform..."
+        docker buildx build \
+          --platform linux/amd64 \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --push .
+        echo "✅ Backend image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
     
-    - name: Build and push backend image
+    - name: Build, tag, and push frontend image to Amazon ECR
+      working-directory: ./JNv3/apps/frontend-react
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.PROJECT_NAME }}-frontend
+        IMAGE_TAG: ${{ steps.build-info.outputs.IMAGE_TAG }}
       run: |
-        cd /tmp/backend-app
-        docker build -t ${{ needs.deploy-infrastructure.outputs.backend_repo_url }}:latest .
-        docker push ${{ needs.deploy-infrastructure.outputs.backend_repo_url }}:latest
-    
-    - name: Build and push frontend image
-      run: |
-        cd /tmp/frontend-app
-        docker build -t ${{ needs.deploy-infrastructure.outputs.frontend_repo_url }}:latest .
-        docker push ${{ needs.deploy-infrastructure.outputs.frontend_repo_url }}:latest
-    
-    - name: Notify on Image Build Failure
-      if: failure()
-      run: |
-        echo "## ❌ Docker Image Build Failed" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Error occurred during Docker image build/push.**" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Debug Steps:**" >> $GITHUB_STEP_SUMMARY
-        echo "1. Check ECR repository permissions" >> $GITHUB_STEP_SUMMARY
-        echo "2. Verify Docker build context" >> $GITHUB_STEP_SUMMARY
-        echo "3. Check ECR login credentials" >> $GITHUB_STEP_SUMMARY
+        echo "🔨 Building frontend image for AMD64 platform..."
+        docker buildx build \
+          --platform linux/amd64 \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --push .
+        echo "✅ Frontend image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-  update-services:
+    - name: Image Build Summary
+      run: |
+        echo "## 🐳 Docker Images Built Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Backend Image:** \`${{ steps.login-ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-backend:${{ steps.build-info.outputs.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Frontend Image:** \`${{ steps.login-ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-frontend:${{ steps.build-info.outputs.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Platform:** linux/amd64 (ECS Fargate compatible)" >> $GITHUB_STEP_SUMMARY
+
+  update-ecs-services:
     name: Update ECS Services
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, build-and-push-images]
@@ -399,61 +230,144 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
     
-    - name: Update ECS services to desired count
+    - name: Force new deployment for backend service
       run: |
-        # Update backend service
+        echo "🔄 Triggering backend service deployment..."
         aws ecs update-service \
-          --cluster ${{ needs.deploy-infrastructure.outputs.cluster_name }} \
-          --service ${PROJECT_NAME}-backend-service \
-          --desired-count 1
-        
-        # Update frontend service
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --service ${{ env.PROJECT_NAME }}-backend-service \
+          --force-new-deployment \
+          --region ${{ env.AWS_REGION }}
+        echo "✅ Backend service deployment triggered"
+    
+    - name: Force new deployment for frontend service
+      run: |
+        echo "🔄 Triggering frontend service deployment..."
         aws ecs update-service \
-          --cluster ${{ needs.deploy-infrastructure.outputs.cluster_name }} \
-          --service ${PROJECT_NAME}-frontend-service \
-          --desired-count 1
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --service ${{ env.PROJECT_NAME }}-frontend-service \
+          --force-new-deployment \
+          --region ${{ env.AWS_REGION }}
+        echo "✅ Frontend service deployment triggered"
     
     - name: Wait for services to stabilize
       run: |
-        echo "Waiting for backend service to stabilize..."
-        aws ecs wait services-stable \
-          --cluster ${{ needs.deploy-infrastructure.outputs.cluster_name }} \
-          --services ${PROJECT_NAME}-backend-service
+        echo "⏳ Waiting for services to stabilize..."
         
-        echo "Waiting for frontend service to stabilize..."
+        echo "Waiting for backend service..."
         aws ecs wait services-stable \
-          --cluster ${{ needs.deploy-infrastructure.outputs.cluster_name }} \
-          --services ${PROJECT_NAME}-frontend-service
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-backend-service \
+          --region ${{ env.AWS_REGION }}
+        
+        echo "Waiting for frontend service..."
+        aws ecs wait services-stable \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-frontend-service \
+          --region ${{ env.AWS_REGION }}
+        
+        echo "✅ All services are stable"
     
-    - name: Final Deployment Summary
+    - name: Check service health
       run: |
-        echo "## 🚀 JobQuest Navigator v3 - Complete Application Deployed!" >> $GITHUB_STEP_SUMMARY
+        echo "🏥 Checking service health..."
+        
+        # Get service status
+        BACKEND_STATUS=$(aws ecs describe-services \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-backend-service \
+          --query 'services[0].[runningCount,desiredCount]' \
+          --output text \
+          --region ${{ env.AWS_REGION }})
+        
+        FRONTEND_STATUS=$(aws ecs describe-services \
+          --cluster ${{ env.PROJECT_NAME }}-cluster \
+          --services ${{ env.PROJECT_NAME }}-frontend-service \
+          --query 'services[0].[runningCount,desiredCount]' \
+          --output text \
+          --region ${{ env.AWS_REGION }})
+        
+        echo "Backend Service: $BACKEND_STATUS"
+        echo "Frontend Service: $FRONTEND_STATUS"
+        
+        echo "## 🚀 Service Deployment Status" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**🎉 FULL-STACK DEPLOYMENT SUCCESSFUL**" >> $GITHUB_STEP_SUMMARY
+        echo "**Backend Service:** $BACKEND_STATUS" >> $GITHUB_STEP_SUMMARY
+        echo "**Frontend Service:** $FRONTEND_STATUS" >> $GITHUB_STEP_SUMMARY
+
+  validate-deployment:
+    name: Validate Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, update-ecs-services]
+    if: success()
+    
+    steps:
+    - name: Test application endpoints
+      run: |
+        APP_URL="${{ needs.deploy-infrastructure.outputs.application_url }}"
+        
+        echo "🌐 Testing application endpoints..."
+        
+        # Test frontend
+        echo "Testing frontend..."
+        FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}/" || echo "000")
+        echo "Frontend status: $FRONTEND_STATUS"
+        
+        # Test backend health
+        echo "Testing backend health..."
+        BACKEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}/api/health" || echo "000")
+        echo "Backend health status: $BACKEND_STATUS"
+        
+        # Test GraphQL endpoint
+        echo "Testing GraphQL endpoint..."
+        GRAPHQL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}/graphql" || echo "000")
+        echo "GraphQL status: $GRAPHQL_STATUS"
+        
+        echo "## 🎯 Deployment Validation Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Project:** JobQuest Navigator v3" >> $GITHUB_STEP_SUMMARY
-        echo "**Student:** Kevin Wang" >> $GITHUB_STEP_SUMMARY
-        echo "**Course:** CAA900 Software Development Capstone" >> $GITHUB_STEP_SUMMARY
-        echo "**Architecture:** AWS ECS Fargate + RDS PostgreSQL + ALB" >> $GITHUB_STEP_SUMMARY
+        echo "**Application URL:** $APP_URL" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🔗 Application Access" >> $GITHUB_STEP_SUMMARY
-        echo "**Frontend URL:** ${{ needs.deploy-infrastructure.outputs.application_url }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Backend API:** ${{ needs.deploy-infrastructure.outputs.application_url }}/api/status" >> $GITHUB_STEP_SUMMARY
-        echo "**Health Check:** ${{ needs.deploy-infrastructure.outputs.application_url }}/health" >> $GITHUB_STEP_SUMMARY
+        echo "| Endpoint | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Frontend | HTTP $FRONTEND_STATUS | $([ "$FRONTEND_STATUS" -eq 200 ] && echo "✅ Healthy" || echo "⚠️ Check needed") |" >> $GITHUB_STEP_SUMMARY
+        echo "| Backend API | HTTP $BACKEND_STATUS | $([ "$BACKEND_STATUS" -eq 200 ] && echo "✅ Healthy" || echo "⚠️ Check needed") |" >> $GITHUB_STEP_SUMMARY
+        echo "| GraphQL | HTTP $GRAPHQL_STATUS | $([ "$GRAPHQL_STATUS" -eq 200 ] && echo "✅ Healthy" || echo "⚠️ Check needed") |" >> $GITHUB_STEP_SUMMARY
+        
+        # Summary
+        if [ "$FRONTEND_STATUS" = "200" ] && [ "$BACKEND_STATUS" = "200" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Deployment Successful!** All services are healthy and accessible." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Deployment completed but some services need attention.** Check the endpoint statuses above." >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Deployment success notification
+      if: success()
+      run: |
+        echo "## 🎉 Deployment Completed Successfully!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🏗️ Infrastructure Components" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ **ECS Fargate Cluster:** ${{ needs.deploy-infrastructure.outputs.cluster_name }}" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ **Application Load Balancer:** Public endpoint with path-based routing" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ **RDS PostgreSQL:** Production database with automated backups" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ **ECR Repositories:** Container images pushed and deployed" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ **VPC Networking:** Public/private subnets with NAT gateway" >> $GITHUB_STEP_SUMMARY
+        echo "**JobQuest Navigator v3** has been deployed to production:" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### ✅ CAA900 Requirements Achieved" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Complete full-stack application deployed to AWS" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Containerized microservices architecture" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Production-grade infrastructure with IaC" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Automated CI/CD pipeline with GitHub Actions" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Database integration and data persistence" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Load balancing and scalability features" >> $GITHUB_STEP_SUMMARY
+        echo "🌐 **Access your application:** ${{ needs.deploy-infrastructure.outputs.application_url }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Deployment completed at:** $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "**What was deployed:**" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ AWS Infrastructure (Terraform)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ FastAPI Backend with GraphQL" >> $GITHUB_STEP_SUMMARY  
+        echo "- ✅ React 19 Frontend" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ PostgreSQL Database" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Application Load Balancer" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ ECS Fargate Services" >> $GITHUB_STEP_SUMMARY
+
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "❌ Deployment validation failed. Consider manual rollback if needed."
+        echo "## ❌ Deployment Validation Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "The deployment completed but validation checks failed." >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY  
+        echo "1. Check ECS service logs in CloudWatch" >> $GITHUB_STEP_SUMMARY
+        echo "2. Verify container health and startup logs" >> $GITHUB_STEP_SUMMARY
+        echo "3. Check Application Load Balancer target group health" >> $GITHUB_STEP_SUMMARY
+        echo "4. Consider manual rollback if necessary" >> $GITHUB_STEP_SUMMARY

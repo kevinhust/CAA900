@@ -685,7 +685,20 @@ resource "aws_ecs_service" "backend" {
     container_port   = var.backend_port
   }
 
+  deployment_configuration {
+    deployment_circuit_breaker {
+      enable   = true
+      rollback = true
+    }
+    maximum_percent         = 200
+    minimum_healthy_percent = 100
+  }
+
   depends_on = [aws_lb_listener.main]
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 
   tags = {
     Name = "${var.project_name}-backend-service"
@@ -711,7 +724,20 @@ resource "aws_ecs_service" "frontend" {
     container_port   = var.frontend_port
   }
 
+  deployment_configuration {
+    deployment_circuit_breaker {
+      enable   = true
+      rollback = true
+    }
+    maximum_percent         = 200
+    minimum_healthy_percent = 100
+  }
+
   depends_on = [aws_lb_listener.main]
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 
   tags = {
     Name = "${var.project_name}-frontend-service"
