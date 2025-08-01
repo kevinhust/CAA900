@@ -330,7 +330,7 @@ resource "aws_lb" "main" {
 }
 
 resource "aws_lb_target_group" "backend" {
-  name        = "${var.project_name}-backend-tg"
+  name        = "jqnav-v3-backend-tg"
   port        = 8000
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
@@ -354,7 +354,7 @@ resource "aws_lb_target_group" "backend" {
 }
 
 resource "aws_lb_target_group" "frontend" {
-  name        = "${var.project_name}-frontend-tg"
+  name        = "jqnav-v3-frontend-tg"
   port        = 3000
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
@@ -497,7 +497,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# ECS Task Definitions (Placeholder)
+# ECS Task Definitions (Using placeholder images - will be updated by CI/CD pipeline)
 resource "aws_ecs_task_definition" "backend" {
   family                   = "${var.project_name}-backend"
   network_mode             = "awsvpc"
@@ -509,7 +509,8 @@ resource "aws_ecs_task_definition" "backend" {
   container_definitions = jsonencode([
     {
       name  = "backend"
-      image = "${aws_ecr_repository.backend.repository_url}:latest"
+      # Placeholder image - will be replaced with actual ECR image by CI/CD pipeline
+      image = "public.ecr.aws/docker/library/python:3.11-slim"
       
       portMappings = [
         {
@@ -559,7 +560,8 @@ resource "aws_ecs_task_definition" "frontend" {
   container_definitions = jsonencode([
     {
       name  = "frontend"
-      image = "${aws_ecr_repository.frontend.repository_url}:latest"
+      # Placeholder image - will be replaced with actual ECR image by CI/CD pipeline
+      image = "public.ecr.aws/docker/library/node:18-alpine"
       
       portMappings = [
         {
