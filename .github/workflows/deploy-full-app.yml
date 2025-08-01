@@ -73,6 +73,7 @@ jobs:
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
+        TF_VAR_secret_key: ${{ secrets.SECRET_KEY }}
       run: |
         cd JNv3/infrastructure/terraform
         terraform plan -input=false -no-color -out=tfplan
@@ -92,6 +93,7 @@ jobs:
       env:
         TF_VAR_project_name: ${{ env.PROJECT_NAME }}
         TF_VAR_aws_region: ${{ env.AWS_REGION }}
+        TF_VAR_secret_key: ${{ secrets.SECRET_KEY }}
       run: |
         cd JNv3/infrastructure/terraform
         echo "🚀 Applying Terraform plan to production..."
